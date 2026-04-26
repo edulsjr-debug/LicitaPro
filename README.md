@@ -1,96 +1,135 @@
-# Proxy Licitação
+# LicitaPro
 
-Servidor proxy local em FastAPI que analisa editais de licitação e gera uma Ficha de Licitação estruturada via API da Anthropic.
+Sistema web de análise de editais de licitação com IA. Processa PDFs e documentos de editais públicos, extrai os pontos críticos automaticamente e gera uma **Ficha de Licitação** estruturada — economizando horas de leitura jurídica.
 
-## Requisitos
+---
 
-- Python 3.9+
-- Chave de API da Anthropic
+## Funcionalidades
 
-## Instalação
+### Análise de editais
+- Upload de arquivos por **drag & drop** ou clique
+- Suporte a **PDF, DOCX, XLSX, XLS, TXT**
+- Envio de **múltiplos arquivos** ao mesmo tempo (edital + anexos)
+- Geração automática da Ficha de Licitação via IA
+
+### Ficha de Licitação gerada
+| Campo | Descrição |
+|---|---|
+| Nº e Processo | Número do edital e processo administrativo |
+| Órgão contratante | Nome e contato do órgão |
+| Modalidade e Critério | Pregão, Concorrência, etc. |
+| Valor Estimado | Valor total estimado do contrato |
+| Vigência do contrato | Prazo de duração |
+| Datas | Abertura da sessão e limite para proposta |
+| Garantia e Pagamento | Percentual de garantia e prazo de pagamento |
+| Patrimônio / Capital mínimo | Exigências financeiras de habilitação |
+| Itens a cotar | Tabela com descrição, quantidade e valores |
+| Documentos de habilitação | Lista organizada por categoria |
+| Alertas | Pontos críticos e cláusulas de atenção |
+
+### Histórico
+- Todas as análises são **salvas automaticamente**
+- Painel lateral com busca por órgão ou objeto
+- Filtro por **segmento** (Saúde, Educação, Viagens, etc.)
+- Segmentos detectados automaticamente pela IA
+- Exportação individual como PDF (via impressão do navegador)
+
+### Importação de fichas prontas
+- Import de fichas já realizadas via arquivo (PDF, DOCX, TXT)
+- Import via texto colado diretamente na interface
+
+### Página de status (`/status`)
+- Análises realizadas no dia e limite diário (20/dia)
+- Custo total e custo médio por análise (USD e BRL)
+- Tokens consumidos (entrada e saída)
+- Breakdown por provedor de IA
+- Histórico por segmento
+
+---
+
+## Provedores de IA
+
+O sistema usa múltiplos provedores com fallback automático:
+
+| Provedor | Modelo | Tipo |
+|---|---|---|
+| OpenAI | gpt-4.1-nano / gpt-4o-mini | Pago |
+| OpenRouter | Gemma, Llama, Nemotron | Gratuito |
+| Groq | llama-3.3-70b-versatile | Gratuito |
+
+- Editais pequenos (até ~15 mil caracteres) → provedores **gratuitos**
+- Editais grandes → **OpenAI** como prioridade (melhor qualidade)
+- Se todos os provedores estiverem ocupados, o sistema informa o tempo de espera
+
+---
+
+## Instalação local
+
+**Pré-requisitos:** Python 3.9+
 
 ```bash
-cd C:\projetos\proxy-licitacao
+git clone https://github.com/edulsjr-debug/LicitaPro.git
+cd LicitaPro
 
-# Criar e ativar ambiente virtual (recomendado)
 python -m venv venv
-venv\Scripts\activate       # Windows
-# source venv/bin/activate  # Linux / macOS
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # Linux / macOS
 
-# Instalar dependências
 pip install -r requirements.txt
 ```
 
-## Configuração
+Crie o arquivo `.env` na raiz do projeto:
+
+```
+OPENAI_API_KEY=sua_chave
+OPENROUTER_API_KEY=sua_chave
+GROQ_API_KEY=sua_chave
+GROQ_API_KEY2=sua_chave
+```
+
+Inicie o servidor:
 
 ```bash
-# Copie o arquivo de exemplo e edite com sua chave
-copy .env.example .env
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Abra o `.env` e substitua o valor:
+Acesse: **http://localhost:8000**
 
-```
-ANTHROPIC_API_KEY=sk-ant-api03-SUA_CHAVE_AQUI
-```
+---
 
-## Execução
+## Deploy (Render)
 
-```bash
-python main.py
-```
+O repositório já inclui `render.yaml` configurado.
 
-O servidor sobe em `http://localhost:8000`.
+1. Acesse [render.com](https://render.com) e crie um **Web Service**
+2. Conecte o repositório `edulsjr-debug/LicitaPro`
+3. Preencha as variáveis de ambiente (`OPENAI_API_KEY`, etc.)
+4. Clique em **Deploy**
 
-## Uso
+> **Atenção:** no plano gratuito do Render o histórico de análises é perdido ao reiniciar o serviço. Para histórico persistente é necessário configurar um banco de dados.
 
-### Endpoint
+---
 
-`POST /http://localhost:8000/analisar`
+## Endpoints da API
 
-### Body (JSON)
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/` | Interface principal |
+| GET | `/status` | Painel de uso e custos |
+| POST | `/analisar/arquivo` | Analisa arquivos enviados |
+| POST | `/analisar` | Analisa texto direto (JSON) |
+| GET | `/historico` | Lista todo o histórico |
+| GET | `/historico/{id}` | Retorna ficha de uma análise |
+| POST | `/importar/arquivo` | Importa fichas prontas via arquivo |
+| POST | `/importar/texto` | Importa ficha via texto colado |
+| POST | `/api/reclassificar` | Reclassifica segmentos do histórico |
 
-```json
-{
-  "texto": "Cole aqui o texto completo do edital ou documento de licitação...",
-  "num_docs": 2
-}
-```
+---
 
-| Campo     | Tipo   | Descrição                                 |
-|-----------|--------|-------------------------------------------|
-| `texto`   | string | Texto do edital a ser analisado           |
-| `num_docs`| int    | Quantidade de documentos (padrão: `2`)    |
+## Stack
 
-### Resposta
-
-```json
-{
-  "ficha": "## FICHA DE LICITAÇÃO\n\n**Nº:** ..."
-}
-```
-
-O campo `ficha` contém o Markdown estruturado com todos os campos da licitação.
-
-### Exemplo com curl
-
-```bash
-curl -X POST http://localhost:8000/analisar \
-  -H "Content-Type: application/json" \
-  -d "{\"texto\": \"Pregão Eletrônico nº 001/2025...\", \"num_docs\": 1}"
-```
-
-## Campos gerados na Ficha
-
-- Nº / Órgão / Processo / Objeto
-- Valor Estimado / Modalidade / Critério
-- Vigência / Garantia / Prazo de Pagamento
-- Contato do Órgão / Prazos
-- Modelo de Proposta (tipo de taxa, o que é cotado, como lançar, observação)
-- Itens a Cotar com quantidades e valores
-- Documentos de Habilitação organizados por categoria
-- Alertas com pontos críticos
-
-## Documentação interativa
-
-Acesse `http://localhost:8000/docs` para a interface Swagger gerada automaticamente.
+- **Backend:** FastAPI + Uvicorn
+- **IA:** OpenAI SDK (compatível com OpenRouter e Groq)
+- **Extração de documentos:** pdfplumber, python-docx, openpyxl
+- **Frontend:** HTML/CSS/JS vanilla com design system LicitaPro
+- **Fontes:** Inter + JetBrains Mono (Google Fonts)
