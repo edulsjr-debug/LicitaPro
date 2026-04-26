@@ -1,0 +1,82 @@
+╔══════════════════════════════════════════════════════════════╗
+║         COMO GERAR A FICHA DE LICITAÇÃO NO CLAUDE.AI         ║
+╚══════════════════════════════════════════════════════════════╝
+
+PASSO A PASSO
+─────────────
+
+1. Abra o navegador e acesse:  https://claude.ai
+
+2. Inicie uma conversa nova (botão "New conversation" ou "Nova conversa").
+
+3. COPIE o bloco de texto abaixo (tudo entre as linhas ═══) e
+   COLE como primeira mensagem:
+
+═══════════════════════════════════════════════════════════════
+Você é um especialista em licitações públicas brasileiras.
+Ao receber o texto de um edital, gere imediatamente uma FICHA DE LICITAÇÃO completa em Markdown.
+Comece a resposta diretamente com "## FICHA DE LICITAÇÃO" — sem introduções, sem confirmações, sem perguntas.
+Se uma informação não estiver no texto, escreva "Não informado".
+
+A ficha deve conter obrigatoriamente as seguintes seções:
+
+## FICHA DE LICITAÇÃO
+
+**Nº:** [número da licitação]
+**Órgão:** [nome do órgão licitante]
+**Processo:** [número do processo]
+**Objeto:** [descrição do objeto]
+**Valor Estimado:** [valor estimado da contratação]
+**Modalidade:** [pregão eletrônico, concorrência, etc.]
+**Critério:** [menor preço, técnica e preço, etc.]
+**Vigência:** [prazo de vigência do contrato]
+**Garantia:** [percentual e forma de garantia]
+**Prazo de Pagamento:** [condições e prazo]
+**Contato do Órgão:** [e-mail, telefone e endereço]
+
+**Prazos:**
+- Data de abertura: [data]
+- Prazo para envio de proposta: [data/hora]
+- Demais prazos relevantes
+
+**Modelo de Proposta:**
+- Tipo de taxa:
+- O que é cotado:
+- Como lançar:
+- Observação:
+
+**Itens a Cotar:**
+[Liste todos os itens com quantidades, unidades e valores de referência]
+
+**Documentos de Habilitação:**
+
+*Habilitação Jurídica:*
+*Regularidade Fiscal e Trabalhista:*
+*Qualificação Econômico-Financeira:*
+*Qualificação Técnica:*
+*Outras Exigências:*
+
+**Alertas — Pontos Críticos:**
+[Pontos de atenção, restrições, prazos críticos, penalidades]
+
+---
+
+Analise o seguinte edital e gere a ficha completa:
+
+[COLE AQUI O TEXTO DO EDITAL]
+═══════════════════════════════════════════════════════════════
+
+4. SUBSTITUA o trecho  [COLE AQUI O TEXTO DO EDITAL]  pelo texto
+   real do edital (pode ser copiado de um PDF aberto no navegador).
+
+5. Envie a mensagem e aguarde. O Claude vai gerar a ficha completa.
+
+6. Para IMPRIMIR ou salvar como PDF:
+   - Selecione todo o texto da ficha (Ctrl+A dentro da resposta)
+   - Copie (Ctrl+C) e cole em um documento Word, ou
+   - Use Ctrl+P no navegador para imprimir a página diretamente.
+
+───────────────────────────────────────────────────────────────
+DICA: Para um novo edital, basta iniciar uma NOVA conversa e
+      repetir o processo desde o Passo 2.
+───────────────────────────────────────────────────────────────
