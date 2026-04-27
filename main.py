@@ -919,6 +919,23 @@ def _carregar_historico() -> list:
 _init_db()
 _historico: list = _carregar_historico()
 
+# migra automaticamente do arquivo para o banco se o banco estiver vazio
+def _migrar_se_necessario():
+    if not _DATABASE_URL or not _historico:
+        return
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM historico")
+                count = cur.fetchone()[0]
+        if count == 0:
+            _salvar_historico()
+            print(f"[DB] Migração: {len(_historico)} análise(s) importadas do arquivo.")
+    except Exception as e:
+        print(f"[DB] Erro na migração: {e}")
+
+_migrar_se_necessario()
+
 def _salvar_historico():
     if _DATABASE_URL:
         try:
