@@ -71,7 +71,7 @@ app.add_middleware(
 
 SYSTEM_PROMPT = """Você é um especialista em licitações públicas brasileiras.
 REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÇÃO" — ZERO introduções, ZERO raciocínio, ZERO explicações. Apenas a ficha em Markdown.
-Se um dado não constar no texto, escreva "Não informado".
+Se um dado realmente não constar em nenhuma parte do texto, escreva "Não informado". Mas ANTES de escrever "Não informado" em qualquer campo, leia o documento INTEIRO — especialmente seções de habilitação, anexos, cláusulas e condições. É PROIBIDO escrever "Não informado" para Documentos de Habilitação se o edital contiver qualquer lista de documentos exigidos.
 Calcule o Valor Total de cada item (Qtd × Valor Unit.).
 Siga EXATAMENTE esta estrutura:
 
@@ -990,14 +990,14 @@ MAX_CHARS = 400_000
 LIMITE_PEQUENO = 15_000  # chars — abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
-    (_groq,       "llama-3.1-8b-instant",                    18_000),
-    (_groq2,      "llama-3.1-8b-instant",                    18_000),
-    (_openrouter, "google/gemma-3-12b-it:free",              400_000),
+    (_openrouter, "meta-llama/llama-3.3-70b-instruct:free",  400_000),
     (_openrouter, "google/gemma-3-27b-it:free",              400_000),
     (_openrouter, "google/gemma-4-26b-a4b-it:free",          400_000),
-    (_openrouter, "meta-llama/llama-3.3-70b-instruct:free",  400_000),
     (_openrouter, "nvidia/nemotron-3-super-120b-a12b:free",  400_000),
+    (_openrouter, "google/gemma-3-12b-it:free",              400_000),
     (_openai,     "gpt-4.1-nano",                            400_000),
+    (_groq,       "llama-3.1-8b-instant",                    18_000),
+    (_groq2,      "llama-3.1-8b-instant",                    18_000),
 ]
 
 PROVEDORES_GRANDE = [
