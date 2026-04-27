@@ -876,8 +876,39 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
 
 # ── Histórico de análises ────────────────────────────────────────────────────
 HISTORICO_FILE = Path("historico.json")
+_DATABASE_URL = os.getenv("DATABASE_URL")
+
+def _db_conn():
+    import psycopg2
+    return psycopg2.connect(_DATABASE_URL)
+
+def _init_db():
+    if not _DATABASE_URL:
+        return
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS historico (
+                        id TEXT PRIMARY KEY,
+                        dados JSONB NOT NULL
+                    )
+                """)
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] Erro ao inicializar tabela: {e}")
 
 def _carregar_historico() -> list:
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT dados FROM historico ORDER BY dados->>'timestamp' DESC")
+                    rows = cur.fetchall()
+                    if rows:
+                        return [r[0] for r in rows]
+        except Exception as e:
+            print(f"[DB] Erro ao carregar histórico: {e}")
     try:
         if HISTORICO_FILE.exists():
             return json.loads(HISTORICO_FILE.read_text(encoding="utf-8"))
@@ -885,9 +916,24 @@ def _carregar_historico() -> list:
         pass
     return []
 
+_init_db()
 _historico: list = _carregar_historico()
 
 def _salvar_historico():
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    for item in _historico:
+                        cur.execute("""
+                            INSERT INTO historico (id, dados)
+                            VALUES (%s, %s::jsonb)
+                            ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados
+                        """, (item.get("id"), json.dumps(item, ensure_ascii=False)))
+                conn.commit()
+            return
+        except Exception as e:
+            print(f"[DB] Erro ao salvar histórico: {e}")
     try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
