@@ -97,16 +97,65 @@ Acesse: **http://localhost:8000**
 
 ---
 
+## Ambientes
+
+| Ambiente | URL | Branch |
+|---|---|---|
+| Produção | https://licitapro-0brh.onrender.com | `master` |
+| Teste | https://licitapro-dev.onrender.com | `dev` |
+
+Ambos monitorados pelo **UptimeRobot** a cada 5 minutos para evitar hibernação do plano gratuito do Render.
+
+---
+
+## Banco de dados (Supabase)
+
+O histórico de análises é persistido no **Supabase PostgreSQL** — não se perde em redeploys.
+
+- Tabela: `historico` (campo `id` TEXT PRIMARY KEY, `dados` JSONB)
+- Na primeira inicialização com `DATABASE_URL` configurada, o sistema migra automaticamente o `historico.json` local para o banco
+- Sem `DATABASE_URL`, funciona em modo local com `historico.json` como fallback
+
+Variável de ambiente necessária:
+```
+DATABASE_URL=postgresql://postgres:[SENHA]@db.[PROJETO].supabase.co:5432/postgres?sslmode=require
+```
+
+---
+
+## Fluxo de desenvolvimento
+
+```
+dev branch  →  testa em licitapro-dev.onrender.com
+    ↓  (validado)
+master branch  →  deploy automático em licitapro-0brh.onrender.com
+```
+
+Nunca subir alterações direto no `master` sem testar no `dev` antes.
+
+---
+
 ## Deploy (Render)
 
 O repositório já inclui `render.yaml` configurado.
 
-1. Acesse [render.com](https://render.com) e crie um **Web Service**
-2. Conecte o repositório `edulsjr-debug/LicitaPro`
-3. Preencha as variáveis de ambiente (`OPENAI_API_KEY`, etc.)
-4. Clique em **Deploy**
+**Variáveis de ambiente obrigatórias:**
 
-> **Atenção:** no plano gratuito do Render o histórico de análises é perdido ao reiniciar o serviço. Para histórico persistente é necessário configurar um banco de dados.
+| Variável | Descrição |
+|---|---|
+| `OPENAI_API_KEY` | Chave da OpenAI |
+| `OPENROUTER_API_KEY` | Chave do OpenRouter |
+| `GROQ_API_KEY` | Chave do Groq (conta 1) |
+| `GROQ_API_KEY2` | Chave do Groq (conta 2) |
+| `DATABASE_URL` | Connection string do Supabase (PostgreSQL) |
+
+**Passos para novo ambiente:**
+1. Acesse [render.com](https://render.com) → **New → Web Service**
+2. Conecte o repositório `edulsjr-debug/LicitaPro`
+3. Selecione o branch desejado (`master` para produção, `dev` para teste)
+4. Preencha as 5 variáveis de ambiente acima
+5. Clique em **Deploy**
+6. Adicione monitor no [UptimeRobot](https://uptimerobot.com) para manter o serviço ativo
 
 ---
 
