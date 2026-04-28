@@ -359,17 +359,10 @@ function scoreLabel(s){return s>=75?'Alta':s>=50?'Média':'Baixa'}
 function scoreRing(score,size){
   if(!score)return '';
   var r=(size-8)/2,c=2*Math.PI*r,off=c-(score/100)*c,col=scoreColor(score),fs=size<80?13:20;
-  return '<svg width="'+size+'" height="'+size+'" style="flex-shrink:0">'+
-    '<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="#E5E7EB" stroke-width="4"/>'+
-    '<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="4"'+
-    ' stroke-dasharray="'+c.toFixed(2)+'" stroke-dashoffset="'+off.toFixed(2)+'"'+
-    ' stroke-linecap="round" transform="rotate(-90 '+size/2+' '+size/2+')"/>'+
-    '<text x="'+size/2+'" y="'+size/2+'" text-anchor="middle" dominant-baseline="central"'+
-    ' font-family="Inter,sans-serif" font-size="'+fs+'" font-weight="700" fill="'+col+'">'+score+'</text>'+
-    '</svg>';
+  return `<svg width="${size}" height="${size}" style="flex-shrink:0"><circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="#E5E7EB" stroke-width="4"/><circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${col}" stroke-width="4" stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}" stroke-linecap="round" transform="rotate(-90 ${size/2} ${size/2})"/><text x="${size/2}" y="${size/2}" text-anchor="middle" dominant-baseline="central" font-family="Inter,sans-serif" font-size="${fs}" font-weight="700" fill="${col}">${score}</text></svg>`;
 }
 
-function badge(t,cls){return '<span class="badge '+cls+'">'+t+'</span>'}
+function badge(t,cls){return `<span class="badge ${cls}">${t}</span>`}
 function viabBadge(s){
   if(!s)return '';
   var cls=s>=75?'badge-success':s>=50?'badge-warn':'badge-danger';
@@ -412,50 +405,27 @@ function renderEditaisPage(mc){
   });
   var filterBtns=['todos','alta','media','baixa'].map(function(f){
     var labels={todos:'Todos',alta:'Viabilidade alta',media:'Média',baixa:'Baixa'};
-    return '<button class="filter-pill'+(_filter===f?' active':'')+'" onclick="setFilter(&#39;'+f+'&#39;)">'+labels[f]+'</button>';
+    return `<button class="filter-pill${_filter===f?' active':''}" onclick="setFilter('${f}')">${labels[f]}</button>`;
   }).join('');
+  var emptyBtn=_historico.length===0?`<button class="btn btn-primary" style="margin-top:16px" onclick="showPage('upload')">Analisar primeiro edital</button>`:'';
   var cards=filtered.length===0?
-    '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">'+(_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro')+'</div><div class="empty-sub">'+(_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.')+'</div>'+(_historico.length===0?'<button class="btn btn-primary" style="margin-top:16px" onclick="showPage(&#39;upload&#39;)">Analisar primeiro edital</button>':'')+'</div>':
+    `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
     filtered.map(editalCardHTML).join('');
-  mc.innerHTML='<div class="page">'+
-    '<div class="page-header"><div>'+
-    '<div class="page-eyebrow">Workspace</div>'+
-    '<h1 class="page-title">Editais analisados</h1>'+
-    '<p class="page-sub">'+_historico.length+' edital(is) no histórico · ordenados por data</p>'+
-    '</div><button class="btn btn-primary" onclick="showPage(&#39;upload&#39;)">'+
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>'+
-    'Novo edital</button></div>'+
-    '<div class="stats-grid g4">'+
-    '<div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">'+hoje.length+' <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta à meia-noite</div></div>'+
-    '<div class="stat-card"><div class="lbl">Total salvo</div><div class="val">'+_historico.length+'</div><div class="sub">análises no histórico</div></div>'+
-    '<div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:'+(avgScore?scoreColor(avgScore):'var(--fg-4)')+'">'+(avgScore||'—')+'</div><div class="sub">'+(avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado')+'</div></div>'+
-    '<div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">'+_historico.filter(function(r){return r.score>=75}).length+'</div><div class="sub">de '+_historico.length+' editais</div></div>'+
-    '</div>'+
-    '<div class="filter-row">'+filterBtns+'<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage(&#39;historico&#39;)">Histórico de uso</button></div></div>'+
-    '<div class="edital-list">'+cards+'</div>'+
-    '</div>';
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histórico · ordenados por data</p></div><button class="btn btn-primary" onclick="showPage('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta à meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">análises no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}}">${avgScore||'—'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage('historico')">Histórico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
 }
 
 function setFilter(f){_filter=f;showPage('editais')}
 
 function editalCardHTML(r){
-  var ring=r.score?scoreRing(r.score,64):'<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">—</div>';
-  return '<div class="edital-card" onclick="openEdital(&#39;'+r.id+'&#39;)">'+
-    ring+
-    '<div>'+
-    '<div class="edital-meta">'+
-    '<span class="edital-numero">'+fmtDate(r.timestamp)+'</span>'+
-    (r.segmento?badge(r.segmento,'badge-brand'):'')+
-    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'')+
-    '</div>'+
-    '<div class="edital-objeto">'+escHtml(r.objeto||'Sem descrição')+'</div>'+
-    '<div class="edital-orgao">'+escHtml(r.orgao||'Órgão não identificado')+'</div>'+
-    '</div>'+
-    '<div class="edital-right">'+
-    '<div class="edital-valor">'+escHtml(r.valor||'—')+'</div>'+
-    '<div style="margin-top:6px">'+viabBadge(r.score)+'</div>'+
-    '</div>'+
-    '</div>';
+  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">—</div>`;
+  return `<div class="edital-card" onclick="openEdital('${r.id}')">` + ring +
+    `<div><div class="edital-meta"><span class="edital-numero">${fmtDate(r.timestamp)}</span>` +
+    (r.segmento?badge(r.segmento,'badge-brand'):'') +
+    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
+    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descrição')}</div>` +
+    `<div class="edital-orgao">${escHtml(r.orgao||'Órgão não identificado')}</div></div>` +
+    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'—')}</div>` +
+    `<div style="margin-top:6px">${viabBadge(r.score)}</div></div></div>`;
 }
 
 async function openEdital(id){
@@ -473,28 +443,14 @@ async function openEdital(id){
 }
 
 function renderUploadPage(mc){
-  mc.innerHTML='<div class="page">'+
-    '<div class="page-header"><div>'+
-    '<h1 class="page-title">Novo edital</h1>'+
-    '<p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p>'+
-    '</div></div>'+
-    '<div class="dropzone" id="dropzone" onclick="document.getElementById(&#39;file-input&#39;).click()"'+
-    ' ondragover="event.preventDefault();this.classList.add(&#39;over&#39;)"'+
-    ' ondragleave="this.classList.remove(&#39;over&#39;)"'+
-    ' ondrop="handleDrop(event)">'+
-    '<div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div>'+
-    '<div class="dz-title">Arraste o edital ou clique para enviar</div>'+
-    '<div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div>'+
-    '</div>'+
-    '<div class="file-list" id="file-list"></div>'+
-    '<button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none" onclick="analisarArquivos()">'+
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>'+
-    'Analisar edital</button>'+
-    '<div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">'+
-    '<div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div>'+
-    '<div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Múltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div>'+
-    '<div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div>'+
-    '</div></div>';
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></div><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Múltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
+  var dz=document.getElementById('dropzone');
+  dz.onclick=function(){document.getElementById('file-input').click()};
+  dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
+  dz.ondragleave=function(){dz.classList.remove('over')};
+  dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files)};
+  var btn=document.getElementById('btn-analisar');
+  btn.onclick=analisarArquivos;
   renderFileList();
   document.getElementById('file-input').onchange=function(){addFiles(this.files);this.value=''};
 }
@@ -510,22 +466,17 @@ function renderFileList(){
   var fl=document.getElementById('file-list'),btn=document.getElementById('btn-analisar');
   if(!fl)return;
   fl.innerHTML=_selectedFiles.map(function(f,i){
-    return '<div class="file-item"><span class="file-name">'+escHtml(f.name)+'</span><span class="file-size">'+Math.round(f.size/1024)+' KB</span>'+
-      '<button class="file-rm" onclick="removeFile('+i+')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>';
+    return `<div class="file-item"><span class="file-name">${escHtml(f.name)}</span><span class="file-size">${Math.round(f.size/1024)} KB</span><button class="file-rm" data-rm="${i}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>`;
   }).join('');
   if(btn)btn.style.display=_selectedFiles.length>0?'flex':'none';
+  fl.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){removeFile(+b.dataset.rm)}});
 }
 
 async function analisarArquivos(){
   if(_selectedFiles.length===0||_processing)return;
   _processing=true;
   var mc=document.getElementById('main-content');
-  mc.innerHTML='<div class="page"><div class="processing-card">'+
-    '<div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>'+
-    '<div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando edital…</div>'+
-    '<div style="font-size:14px;color:var(--fg-2)">Extraindo exigências, calculando score de viabilidade. Até 2 minutos.</div>'+
-    '<div class="processing-bar"><div class="processing-fill"></div></div>'+
-    '</div></div>';
+  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando edital…</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigências, calculando score de viabilidade. Até 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
   try{
     var fd=new FormData();
     for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
@@ -546,9 +497,9 @@ async function analisarArquivos(){
 }
 
 function parseExigencias(ficha){
-  var exigs=[],lines=(ficha||'').split('\\n');
+  var exigs=[],lines=(ficha||'').split('\n');
   for(var i=0;i<lines.length;i++){
-    var m=lines[i].match(/^\\[(ok|warn|fail)\\]\\s*(.+?)(?:\\s*[—–-]+\\s*(.*))?$/i);
+    var m=lines[i].match(/^\[(ok|warn|fail)\]\s*(.+?)(?:\s*[—–-]+\s*(.*))?$/i);
     if(m)exigs.push({status:m[1].toLowerCase(),title:m[2].trim(),detail:(m[3]||'').trim()});
   }
   return exigs;
@@ -556,8 +507,8 @@ function parseExigencias(ficha){
 
 function fichaClean(ficha){
   return (ficha||'')
-    .replace(/## Score de Viabilidade[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
-    .replace(/## Análise de Exigências[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## Score de Viabilidade[\s\S]*?(?=\n## |\n*$)/i,'')
+    .replace(/## Análise de Exigências[\s\S]*?(?=\n## |\n*$)/i,'')
     .trim();
 }
 
@@ -570,67 +521,31 @@ var exigIcons={
 function renderDetalhePage(mc,r){
   var exigs=parseExigencias(r.ficha);
   var exigHTML=exigs.length>0?
-    '<div style="margin-top:40px">'+
-    '<h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">Análise de exigências</h3>'+
-    '<p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">'+
-    exigs.length+' exigência(s) · '+
-    exigs.filter(function(e){return e.status==='ok'}).length+' ok · '+
-    exigs.filter(function(e){return e.status==='warn'}).length+' atenção · '+
-    exigs.filter(function(e){return e.status==='fail'}).length+' restritiva(s)</p>'+
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">Análise de exigências</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigência(s) · ${exigs.filter(function(e){return e.status==='ok'}).length} ok · ${exigs.filter(function(e){return e.status==='warn'}).length} atenção · ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
     exigs.map(function(e){
-      return '<div class="exig-item exig-'+e.status+'">'+exigIcons[e.status]+
-        '<div><div class="exig-title">'+escHtml(e.title)+'</div>'+
-        (e.detail?'<div class="exig-detail">'+escHtml(e.detail)+'</div>':'')+
-        '</div></div>';
-    }).join('')+'</div>':'';
+      return `<div class="exig-item exig-${e.status}">${exigIcons[e.status]}<div><div class="exig-title">${escHtml(e.title)}</div>${e.detail?`<div class="exig-detail">${escHtml(e.detail)}</div>`:''}</div></div>`;
+    }).join('') + `</div>` : '';
 
   var fichaHtml=typeof marked!=='undefined'?marked.parse(fichaClean(r.ficha)):
-    '<pre style="white-space:pre-wrap;font-size:13px">'+escHtml(fichaClean(r.ficha))+'</pre>';
+    `<pre style="white-space:pre-wrap;font-size:13px">${escHtml(fichaClean(r.ficha))}</pre>`;
 
-  mc.innerHTML='<div class="page">'+
-    '<button class="back-btn" onclick="showPage(&#39;editais&#39;)">'+
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>'+
-    'Voltar para editais</button>'+
-
-    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px">'+
-    '<div style="flex:1">'+
-    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'+
-    (r.timestamp?'<span style="font-family:var(--font-mono);font-size:12px;color:var(--fg-3)">'+fmtDate(r.timestamp)+'</span>':'')+
-    (r.segmento?badge(r.segmento,'badge-brand'):'')+
-    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'')+
-    '</div>'+
-    '<h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">'+escHtml(r.objeto||'Análise de edital')+'</h1>'+
-    '<p style="font-size:15px;color:var(--fg-2)">'+escHtml(r.orgao||'')+'</p>'+
-    '</div>'+
-    (r.score?'<div style="flex-shrink:0;text-align:center">'+scoreRing(r.score,120)+
-    '<div style="margin-top:8px;font-size:13px;font-weight:600;color:'+scoreColor(r.score)+'">Viabilidade '+scoreLabel(r.score)+'</div></div>':'')+
-    '</div>'+
-
-    '<div class="stats-grid g4" style="margin-bottom:40px">'+
-    '<div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">'+escHtml(r.valor||'—')+'</div></div>'+
-    '<div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">'+escHtml(r.segmento||'—')+'</div></div>'+
-    '<div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:'+(r.score?scoreColor(r.score):'var(--fg-4)')+'">'+(r.score||'—')+'</div><div class="sub">'+(r.score?scoreLabel(r.score)+' viabilidade':'')+'</div></div>'+
-    '<div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">'+(r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'—')+'</div></div>'+
-    '</div>'+
-
-    exigHTML+
-
-    '<div style="margin-top:40px">'+
-    '<h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:16px">Ficha completa</h3>'+
-    '<div class="ficha-content">'+fichaHtml+'</div>'+
-    '</div>'+
-
-    '<div class="action-row">'+
-    '<button class="btn btn-secondary" onclick="window.print()">'+
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>'+
-    'Imprimir / PDF</button>'+
-    '<button class="btn btn-secondary" onclick="copiarFicha(&#39;'+r.id+'&#39;)">'+
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'+
-    'Copiar ficha</button>'+
-    '<button class="btn btn-primary" onclick="toast(&#39;Em breve: geração de proposta por IA.&#39;)">'+
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>'+
-    'Gerar proposta</button>'+
-    '</div></div>';
+  mc.innerHTML=
+    `<div class="page"><button class="back-btn" onclick="showPage('editais')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>Voltar para editais</button>` +
+    `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">` +
+    (r.timestamp?`<span style="font-family:var(--font-mono);font-size:12px;color:var(--fg-3)">${fmtDate(r.timestamp)}</span>`:'') +
+    (r.segmento?badge(r.segmento,'badge-brand'):'') +
+    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
+    `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'Análise de edital')}</h1>` +
+    `<p style="font-size:15px;color:var(--fg-2)">${escHtml(r.orgao||'')}</p></div>` +
+    (r.score?`<div style="flex-shrink:0;text-align:center">${scoreRing(r.score,120)}<div style="margin-top:8px;font-size:13px;font-weight:600;color:${scoreColor(r.score)}">Viabilidade ${scoreLabel(r.score)}</div></div>`:'') +
+    `</div>` +
+    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'—')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'—')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}}">${r.score||'—'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'—'}</div></div></div>` +
+    exigHTML +
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:16px">Ficha completa</h3><div class="ficha-content">${fichaHtml}</div></div>` +
+    `<div class="action-row"><button class="btn btn-secondary" id="btn-print"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Imprimir / PDF</button><button class="btn btn-secondary" id="btn-copy"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar ficha</button><button class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Gerar proposta</button></div></div>`;
+  document.getElementById('btn-print').onclick=function(){window.print()};
+  document.getElementById('btn-copy').onclick=function(){copiarFicha(r.id)};
+  mc.querySelector('.btn-primary:last-child').onclick=function(){toast('Em breve: geração de proposta por IA.')};
 }
 
 async function copiarFicha(id){
@@ -659,32 +574,15 @@ function renderHistoricoPage(mc){
     var s=items.filter(function(r){return r.score}).map(function(r){return r.score});
     var davg=s.length?Math.round(s.reduce(function(a,b){return a+b},0)/s.length):0;
     var altas=items.filter(function(r){return r.score>=75}).length;
-    return '<tr><td style="font-family:var(--font-mono)">'+new Date(d+'T12:00:00').toLocaleDateString('pt-BR')+'</td>'+
-      '<td>'+items.length+'</td>'+
-      '<td style="font-weight:600;color:'+(davg?scoreColor(davg):'var(--fg-4)')+'">'+( davg||'—')+'</td>'+
-      '<td style="color:var(--success-700);font-weight:600">'+altas+'</td></tr>';
+    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}}">${davg||'—'}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
   }).join('');
   var seg={};
   _historico.forEach(function(r){var s=r.segmento||'Outros';seg[s]=(seg[s]||0)+1});
   var segRows=Object.entries(seg).sort(function(a,b){return b[1]-a[1]}).map(function(e){
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;border:1px solid var(--border);border-radius:8px;font-size:13px">'+
-      '<span style="color:var(--fg-2)">'+escHtml(e[0])+'</span>'+
-      '<span style="font-weight:600;color:var(--brand-600);background:var(--brand-50);padding:2px 10px;border-radius:9999px;font-size:12px">'+e[1]+'</span></div>';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;border:1px solid var(--border);border-radius:8px;font-size:13px"><span style="color:var(--fg-2)">${escHtml(e[0])}</span><span style="font-weight:600;color:var(--brand-600);background:var(--brand-50);padding:2px 10px;border-radius:9999px;font-size:12px">${e[1]}</span></div>`;
   }).join('');
 
-  mc.innerHTML='<div class="page">'+
-    '<div class="page-header"><div>'+
-    '<h1 class="page-title">Histórico de uso</h1>'+
-    '<p class="page-sub">Todas as análises agrupadas por dia</p>'+
-    '</div><button class="btn btn-secondary" onclick="showPage(&#39;editais&#39;)">← Editais</button></div>'+
-    '<div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de análises</div><div class="val">'+_historico.length+'</div><div class="sub">no histórico</div></div>'+
-    '<div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:'+(avg?scoreColor(avg):'var(--fg-4)')+'">'+( avg||'—')+'</div><div class="sub">'+(avg?scoreLabel(avg)+' viabilidade':'')+'</div></div>'+
-    '<div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">'+days.length+'</div><div class="sub">dias distintos</div></div></div>'+
-    (days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma análise</div></div>':
-    '<div class="hist-table"><table><thead><tr><th>Dia</th><th>Análises</th><th>Score médio</th><th>Alta viabilidade</th></tr></thead><tbody>'+tableRows+'</tbody></table></div>')+
-    '<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3>'+
-    '<div style="display:flex;flex-direction:column;gap:8px">'+(segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>')+'</div></div>'+
-    '</div>';
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Histórico de uso</h1><p class="page-sub">Todas as análises agrupadas por dia</p></div><button class="btn btn-secondary" onclick="showPage('editais')">← Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de análises</div><div class="val">${_historico.length}</div><div class="sub">no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}}">${avg||'—'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma análise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>Análises</th><th>Score médio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
 }
 
 async function loadHistorico(){
