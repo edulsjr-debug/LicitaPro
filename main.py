@@ -458,9 +458,18 @@ function editalCardHTML(r){
     '</div>';
 }
 
-function openEdital(id){
+async function openEdital(id){
   var r=_historico.find(function(x){return x.id===id});
-  if(r)showPage('detalhe',r);
+  if(!r)return;
+  if(!r.ficha){
+    try{
+      var res=await fetch('/historico/'+id);
+      var data=await res.json();
+      r.ficha=data.ficha;
+      if(data.score!=null)r.score=data.score;
+    }catch(e){console.error('Erro ao buscar ficha:',e);return;}
+  }
+  showPage('detalhe',r);
 }
 
 function renderUploadPage(mc){
@@ -522,12 +531,12 @@ async function analisarArquivos(){
     for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
     var res=await fetch('/analisar/arquivo',{method:'POST',body:fd});
     if(!res.ok){var err=await res.json().catch(function(){return {detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
-    await res.json();
+    var resp=await res.json();
     _selectedFiles=[];
     await loadHistorico();
     _processing=false;
     var newest=_historico[0];
-    if(newest)showPage('detalhe',newest);else showPage('editais');
+    if(newest){newest.ficha=resp.ficha;showPage('detalhe',newest);}else showPage('editais');
     toast('Análise concluída com sucesso!');
   }catch(e){
     _processing=false;
@@ -624,9 +633,13 @@ function renderDetalhePage(mc,r){
     '</div></div>';
 }
 
-function copiarFicha(id){
+async function copiarFicha(id){
   var r=_historico.find(function(x){return x.id===id});
   if(!r)return;
+  if(!r.ficha){
+    try{var res=await fetch('/historico/'+id);var data=await res.json();r.ficha=data.ficha;}
+    catch(e){toast('Erro ao copiar');return;}
+  }
   navigator.clipboard.writeText(r.ficha||'').then(function(){toast('Ficha copiada!')}).catch(function(){toast('Erro ao copiar')});
 }
 
@@ -1266,7 +1279,7 @@ async def get_historico():
 async def get_ficha_historico(id: str):
     for r in _historico:
         if r["id"] == id:
-            return {"ficha": r["ficha"], "orgao": r["orgao"], "segmento": r["segmento"]}
+            return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score")}
     raise HTTPException(404, "Análise não encontrada.")
 
 
