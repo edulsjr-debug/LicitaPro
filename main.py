@@ -412,17 +412,17 @@ function renderEditaisPage(mc){
   });
   var filterBtns=['todos','alta','media','baixa'].map(function(f){
     var labels={todos:'Todos',alta:'Viabilidade alta',media:'Média',baixa:'Baixa'};
-    return '<button class="filter-pill'+(_filter===f?' active':'')+'" onclick="setFilter(\''+f+'\')">'+labels[f]+'</button>';
+    return '<button class="filter-pill'+(_filter===f?' active':'')+'" onclick="setFilter(&#39;'+f+'&#39;)">'+labels[f]+'</button>';
   }).join('');
   var cards=filtered.length===0?
-    '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">'+(_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro')+'</div><div class="empty-sub">'+(_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.')+'</div>'+(_historico.length===0?'<button class="btn btn-primary" style="margin-top:16px" onclick="showPage(\'upload\')">Analisar primeiro edital</button>':'')+'</div>':
+    '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">'+(_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro')+'</div><div class="empty-sub">'+(_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.')+'</div>'+(_historico.length===0?'<button class="btn btn-primary" style="margin-top:16px" onclick="showPage(&#39;upload&#39;)">Analisar primeiro edital</button>':'')+'</div>':
     filtered.map(editalCardHTML).join('');
   mc.innerHTML='<div class="page">'+
     '<div class="page-header"><div>'+
     '<div class="page-eyebrow">Workspace</div>'+
     '<h1 class="page-title">Editais analisados</h1>'+
     '<p class="page-sub">'+_historico.length+' edital(is) no histórico · ordenados por data</p>'+
-    '</div><button class="btn btn-primary" onclick="showPage(\'upload\')">'+
+    '</div><button class="btn btn-primary" onclick="showPage(&#39;upload&#39;)">'+
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>'+
     'Novo edital</button></div>'+
     '<div class="stats-grid g4">'+
@@ -431,7 +431,7 @@ function renderEditaisPage(mc){
     '<div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:'+(avgScore?scoreColor(avgScore):'var(--fg-4)')+'">'+(avgScore||'—')+'</div><div class="sub">'+(avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado')+'</div></div>'+
     '<div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">'+_historico.filter(function(r){return r.score>=75}).length+'</div><div class="sub">de '+_historico.length+' editais</div></div>'+
     '</div>'+
-    '<div class="filter-row">'+filterBtns+'<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage(\'historico\')">Histórico de uso</button></div></div>'+
+    '<div class="filter-row">'+filterBtns+'<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage(&#39;historico&#39;)">Histórico de uso</button></div></div>'+
     '<div class="edital-list">'+cards+'</div>'+
     '</div>';
 }
@@ -440,7 +440,7 @@ function setFilter(f){_filter=f;showPage('editais')}
 
 function editalCardHTML(r){
   var ring=r.score?scoreRing(r.score,64):'<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">—</div>';
-  return '<div class="edital-card" onclick="openEdital(\''+r.id+'\')">'+
+  return '<div class="edital-card" onclick="openEdital(&#39;'+r.id+'&#39;)">'+
     ring+
     '<div>'+
     '<div class="edital-meta">'+
@@ -478,7 +478,7 @@ function renderUploadPage(mc){
     '<h1 class="page-title">Novo edital</h1>'+
     '<p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p>'+
     '</div></div>'+
-    '<div class="dropzone" id="dropzone" onclick="document.getElementById(\'file-input\').click()"'+
+    '<div class="dropzone" id="dropzone" onclick="document.getElementById(&#39;file-input&#39;).click()"'+
     ' ondragover="event.preventDefault();this.classList.add(\'over\')"'+
     ' ondragleave="this.classList.remove(\'over\')"'+
     ' ondrop="handleDrop(event)">'+
@@ -588,7 +588,7 @@ function renderDetalhePage(mc,r){
     '<pre style="white-space:pre-wrap;font-size:13px">'+escHtml(fichaClean(r.ficha))+'</pre>';
 
   mc.innerHTML='<div class="page">'+
-    '<button class="back-btn" onclick="showPage(\'editais\')">'+
+    '<button class="back-btn" onclick="showPage(&#39;editais&#39;)">'+
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>'+
     'Voltar para editais</button>'+
 
@@ -624,10 +624,10 @@ function renderDetalhePage(mc,r){
     '<button class="btn btn-secondary" onclick="window.print()">'+
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>'+
     'Imprimir / PDF</button>'+
-    '<button class="btn btn-secondary" onclick="copiarFicha(\''+r.id+'\')">'+
+    '<button class="btn btn-secondary" onclick="copiarFicha(&#39;'+r.id+'&#39;)">'+
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'+
     'Copiar ficha</button>'+
-    '<button class="btn btn-primary" onclick="toast(\'Em breve: geração de proposta por IA.\')">'+
+    '<button class="btn btn-primary" onclick="toast(&#39;Em breve: geração de proposta por IA.&#39;)">'+
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>'+
     'Gerar proposta</button>'+
     '</div></div>';
@@ -676,7 +676,7 @@ function renderHistoricoPage(mc){
     '<div class="page-header"><div>'+
     '<h1 class="page-title">Histórico de uso</h1>'+
     '<p class="page-sub">Todas as análises agrupadas por dia</p>'+
-    '</div><button class="btn btn-secondary" onclick="showPage(\'editais\')">← Editais</button></div>'+
+    '</div><button class="btn btn-secondary" onclick="showPage(&#39;editais&#39;)">← Editais</button></div>'+
     '<div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de análises</div><div class="val">'+_historico.length+'</div><div class="sub">no histórico</div></div>'+
     '<div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:'+(avg?scoreColor(avg):'var(--fg-4)')+'">'+( avg||'—')+'</div><div class="sub">'+(avg?scoreLabel(avg)+' viabilidade':'')+'</div></div>'+
     '<div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">'+days.length+'</div><div class="sub">dias distintos</div></div></div>'+
