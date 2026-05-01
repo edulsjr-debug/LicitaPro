@@ -16,6 +16,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from parser_edital import analisar_sem_api
+
 load_dotenv()
 
 app = FastAPI(title="Proxy Licitação")
@@ -23,6 +25,12 @@ app = FastAPI(title="Proxy Licitação")
 import datetime
 
 LIMITE_DIARIO = 20  # análises por dia
+USAR_PARSER_LOCAL = os.getenv("USAR_PARSER_LOCAL", "true").lower() not in ("0", "false", "no", "off")
+PARSER_FALLBACK_API = os.getenv("PARSER_FALLBACK_API", "true").lower() not in ("0", "false", "no", "off")
+try:
+    PARSER_MIN_CONFIANCA = int(os.getenv("PARSER_MIN_CONFIANCA", "70"))
+except ValueError:
+    PARSER_MIN_CONFIANCA = 70
 
 _stats = {
     "total_analises": 0,
@@ -933,6 +941,41 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
     raise HTTPException(503, f"Todas as IAs estão sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
 
 
+def _registrar_uso_parser_local(confianca: int):
+    _stats["total_analises"] += 1
+    p = _stats["por_provedor"].setdefault(
+        "parser-local",
+        {"analises": 0, "tokens": 0, "custo_usd": 0.0},
+    )
+    p["analises"] += 1
+    p["tokens"] = 0
+    p["custo_usd"] = 0.0
+    p["confianca"] = confianca
+
+
+async def analisar_com_fallback(texto: str, num_docs: int) -> str:
+    if not USAR_PARSER_LOCAL:
+        return await chamar_groq(texto, num_docs)
+
+    try:
+        resultado = analisar_sem_api(texto, min_confianca=PARSER_MIN_CONFIANCA)
+    except Exception as e:
+        print(f"[PARSER] Erro no parser local: {e}")
+        if PARSER_FALLBACK_API:
+            return await chamar_groq(texto, num_docs)
+        raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
+
+    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+        print(
+            "[PARSER] Confiança baixa "
+            f"({resultado.get('confianca', 0)}%). Usando fallback por API."
+        )
+        return await chamar_groq(texto, num_docs)
+
+    _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
+    return resultado["ficha"]
+
+
 @app.get("/status", response_class=HTMLResponse)
 async def status():
     total   = _stats["total_analises"]
@@ -956,6 +999,8 @@ async def status():
 
     # linhas de provedores
     def _tag(m: str) -> str:
+        if m == "parser-local":
+            return '<span class="tag-free">local</span>'
         return '<span class="tag-free">gratuito</span>' if (":free" in m or "instant" in m) else '<span class="tag-pago">pago</span>'
 
     prov_rows = "".join(
@@ -1222,7 +1267,7 @@ async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
             trecho = txt[:inicio] + "\n\n[...]\n\n" + txt[-fim:]
         partes.append(f"=== {nome} ===\n{trecho}")
     texto_completo = "\n\n".join(partes)
-    ficha = await chamar_groq(texto_completo, len(arquivos))
+    ficha = await analisar_com_fallback(texto_completo, len(arquivos))
     _stats["analises_hoje"] += 1
     registrar_analise(ficha)
     return AnalisarResponse(ficha=ficha)
@@ -1230,7 +1275,7 @@ async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
 
 @app.post("/analisar", response_model=AnalisarResponse)
 async def analisar(request: AnalisarRequest):
-    ficha = await chamar_groq(request.texto, request.num_docs)
+    ficha = await analisar_com_fallback(request.texto, request.num_docs)
     registrar_analise(ficha)
     return AnalisarResponse(ficha=ficha)
 
