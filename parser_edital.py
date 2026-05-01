@@ -105,7 +105,7 @@ SEGMENTOS = [
     ),
     ("Saúde", ["saude", "hospital", "medicamento", "medico", "ambulatorial"]),
     ("Alimentação", ["alimentacao", "refeicao", "merenda", "generos alimenticios"]),
-    ("Transporte", ["transporte", "veiculo", "frota", "combustivel", "fretamento"]),
+    ("Transporte", ["transporte", "veiculo", "frota", "combustivel", "fretamento", "passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "bilhetes aereos"]),
 ]
 
 
@@ -546,12 +546,124 @@ def extrair_documentos_habilitacao(texto: str, secoes: Optional[dict[str, str]] 
     return unicos[:20]
 
 
+_SEGMENTOS_ESPECIFICOS = [
+    # termos inequívocos que valem mais que qualquer coincidência genérica
+    ("Transporte", ["passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "fretamento de aeronave"]),
+    ("Segurança", ["vigilancia patrimonial", "portaria remota", "monitoramento eletronico", "circuito fechado"]),
+    ("Limpeza e Conservação", ["limpeza e conservacao", "asseio e conservacao", "servicos de limpeza"]),
+    ("Manutenção", ["manutencao predial", "manutencao eletrica", "manutencao hidraulica"]),
+]
+
+
 def detectar_segmento(objeto: str, texto: str = "") -> str:
-    base = _normalizar(f"{objeto} {texto[:2500]}")
+    base_objeto = _normalizar(objeto)
+    base_texto = _normalizar(texto[:1500])
+    # 1ª passagem: termos específicos e inequívocos no objeto
+    for segmento, palavras in _SEGMENTOS_ESPECIFICOS:
+        if any(p in base_objeto for p in palavras):
+            return segmento
+    # 2ª passagem: lista geral contra o objeto
     for segmento, palavras in SEGMENTOS:
-        if any(p in base for p in palavras):
+        if any(p in base_objeto for p in palavras):
+            return segmento
+    # fallback: início do texto completo
+    for segmento, palavras in _SEGMENTOS_ESPECIFICOS:
+        if any(p in base_texto for p in palavras):
+            return segmento
+    for segmento, palavras in SEGMENTOS:
+        if any(p in base_texto for p in palavras):
             return segmento
     return "Outros"
+
+
+def calcular_score_viabilidade(campos: dict[str, Any]) -> tuple[int, str, list[str]]:
+    """Score de viabilidade real da licitação (não mede qualidade da extração).
+
+    Dimensões:
+      - Aderência ao segmento  0–40
+      - Atratividade financeira 0–25
+      - Competitividade         0–20  (modalidade + critério)
+      - Duração do contrato     0–15
+    """
+    justificativas: list[str] = []
+    total = 0
+
+    # 1. Aderência ao segmento (0–40)
+    segmento = campos.get("segmento", "Outros")
+    pts_seg = {
+        "Segurança": 40, "Limpeza e Conservação": 35, "Manutenção": 25,
+        "Obras e Infraestrutura": 10, "Tecnologia e TI": 8,
+        "Transporte": 6, "Saúde": 5, "Alimentação": 5, "Outros": 5,
+    }.get(segmento, 5)
+    total += pts_seg
+    justificativas.append(f"Segmento {segmento}: {pts_seg}/40 pts")
+
+    # 2. Atratividade financeira (0–25)
+    valor_str = campos.get("valor", "")
+    valor_num = _valor_float(valor_str) if _is_identificado(valor_str) else 0
+    if valor_num <= 0:
+        pts_fin, desc_fin = 0, "valor não identificado"
+    elif valor_num < 30_000:
+        pts_fin, desc_fin = 5, "muito baixo"
+    elif valor_num < 100_000:
+        pts_fin, desc_fin = 12, "baixo"
+    elif valor_num < 500_000:
+        pts_fin, desc_fin = 20, "médio"
+    elif valor_num < 2_000_000:
+        pts_fin, desc_fin = 25, "atrativo"
+    elif valor_num < 10_000_000:
+        pts_fin, desc_fin = 18, "alto"
+    else:
+        pts_fin, desc_fin = 10, "muito alto"
+    total += pts_fin
+    justificativas.append(f"Valor {desc_fin} ({valor_str or 'não identificado'}): {pts_fin}/25 pts")
+
+    # 3. Competitividade: modalidade + critério (0–20)
+    mod_norm = _normalizar(campos.get("modalidade", ""))
+    crit_norm = _normalizar(campos.get("criterio_julgamento", ""))
+    if "inexigibilidade" in mod_norm:
+        pts_comp, desc_comp = 20, "inexigibilidade (sem concorrência)"
+    elif "dispensa" in mod_norm:
+        pts_comp, desc_comp = 16, "dispensa (baixa concorrência)"
+    elif "chamamento" in mod_norm:
+        pts_comp, desc_comp = 13, "chamamento público"
+    elif "tomada" in mod_norm:
+        pts_comp, desc_comp = 12, "tomada de preços"
+    elif "tecnica e preco" in crit_norm or "melhor tecnica" in crit_norm:
+        pts_comp, desc_comp = 13, "técnica e preço (qualidade valorizada)"
+    elif "maior desconto" in crit_norm:
+        pts_comp, desc_comp = 9, "maior desconto"
+    elif "menor preco" in crit_norm:
+        pts_comp, desc_comp = 7, "menor preço (alta concorrência)"
+    else:
+        pts_comp, desc_comp = 8, "modalidade padrão"
+    total += pts_comp
+    justificativas.append(f"Competitividade ({desc_comp}): {pts_comp}/20 pts")
+
+    # 4. Duração do contrato (0–15)
+    prazo_str = campos.get("prazo_vigencia", "")
+    meses = 0
+    if _is_identificado(prazo_str):
+        m = re.search(r"(\d+)\s*(dia|mes|ano)", _normalizar(prazo_str))
+        if m:
+            n, un = int(m.group(1)), m.group(2)
+            meses = n * 12 if "ano" in un else (n if "mes" in un else n // 30)
+    if meses <= 0:
+        pts_dur, desc_dur = 8, "prazo não identificado (assume 12 meses)"
+    elif meses >= 24:
+        pts_dur, desc_dur = 15, "longo (≥24 meses)"
+    elif meses >= 12:
+        pts_dur, desc_dur = 12, "adequado (12–23 meses)"
+    elif meses >= 6:
+        pts_dur, desc_dur = 8, "curto (6–11 meses)"
+    else:
+        pts_dur, desc_dur = 4, "muito curto (<6 meses)"
+    total += pts_dur
+    justificativas.append(f"Duração {desc_dur}: {pts_dur}/15 pts")
+
+    total = max(10, min(100, total))
+    nivel = "Alta" if total >= 75 else "Média" if total >= 50 else "Baixa"
+    return total, nivel, justificativas
 
 
 def calcular_confianca(campos: dict[str, Any]) -> tuple[int, list[str]]:
@@ -637,9 +749,12 @@ def gerar_ficha(campos: dict[str, Any]) -> str:
 {alertas_md}
 
 ## Score de Viabilidade
-**Score:** {campos.get('score', 0)}
-**Nível:** {campos.get('nivel', 'Média')}
-**Justificativa:** Campos principais extraídos automaticamente. Confiança da extração: {campos.get('confianca', 0)}%.
+**{campos.get('score', 0)}/100 — {campos.get('nivel', 'Média')}**
+
+{chr(10).join('- ' + j for j in campos.get('justificativas_score', []))}
+
+## Confiança da Extração
+**{campos.get('confianca', 0)}%** dos campos identificados automaticamente.{(' Campos faltantes: ' + ', '.join(campos.get('faltantes', [])).replace('_', ' ') + '.') if campos.get('faltantes') else ''}
 
 ---
 *Fonte: extração automática sem API. Processado em {datetime.now().strftime('%d/%m/%Y %H:%M')}.*
@@ -667,7 +782,11 @@ def analisar_sem_api(texto: str, min_confianca: int = 70) -> dict[str, Any]:
     campos["confianca"] = confianca
     campos["faltantes"] = faltantes
     campos["usar_fallback_api"] = confianca < min_confianca
-    campos["score"] = max(30, min(95, confianca))
-    campos["nivel"] = "Alta" if confianca >= 80 else "Média" if confianca >= 55 else "Baixa"
+
+    score, nivel, justificativas = calcular_score_viabilidade(campos)
+    campos["score"] = score
+    campos["nivel"] = nivel
+    campos["justificativas_score"] = justificativas
+
     campos["ficha"] = gerar_ficha(campos)
     return campos
