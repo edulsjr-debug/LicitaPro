@@ -70,6 +70,12 @@ try:
     OCR_MAX_FILE_BYTES = int(os.getenv("OCR_MAX_FILE_BYTES", "819200"))  # 800 KB
 except ValueError:
     OCR_MAX_FILE_BYTES = 819200
+APP_VERSION = os.getenv("APP_VERSION", "dev")
+APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
+APP_COMMIT = os.getenv("APP_COMMIT", "local")
+APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT", "")
+APP_VERSION_LABEL = f"{APP_VERSION} · {APP_CHANNEL}"
+APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
 _OCR_ENGINE = None
 
@@ -247,6 +253,8 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .quota-val{font-size:13px;font-weight:600;color:var(--fg-1);font-variant-numeric:tabular-nums}
 .quota-bar{height:4px;background:var(--ink-150);border-radius:9999px;margin-top:6px;overflow:hidden}
 .quota-fill{height:100%;border-radius:9999px;background:var(--brand-500);transition:width .3s}
+.version-line{margin-top:10px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.version-sub{margin-top:4px;font-size:11px;color:var(--fg-4);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .main-content{margin-left:var(--sidebar-w);flex:1;min-height:100vh;overflow-y:auto}
 .page{padding:40px 48px;max-width:1100px;animation:fadeIn 200ms var(--ease-out)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -388,6 +396,8 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
     <div class="quota-label">Análises hoje</div>
     <div class="quota-val" id="quota-val">— / 20</div>
     <div class="quota-bar"><div class="quota-fill" id="quota-fill" style="width:0%"></div></div>
+    <div class="version-line">{APP_VERSION_LABEL}</div>
+    <div class="version-sub">commit {APP_COMMIT_LABEL}</div>
   </div>
 </aside>
 
@@ -1416,7 +1426,7 @@ tr:hover td{{background:var(--ink-50)}}
     </div>
   </div>
 
-  <p class="footer-note">Atualiza automaticamente a cada 30 s &nbsp;·&nbsp; {_stats["hoje"]}</p>
+  <p class="footer-note">Atualiza automaticamente a cada 30 s &nbsp;·&nbsp; {_stats["hoje"]} &nbsp;·&nbsp; {APP_VERSION_LABEL} &nbsp;·&nbsp; commit {APP_COMMIT_LABEL}</p>
 </main>
 <script>setTimeout(()=>location.reload(),30000);</script>
 </body>
