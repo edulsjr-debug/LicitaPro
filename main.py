@@ -1242,40 +1242,9 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
 @app.get("/status", response_class=HTMLResponse)
 async def status():
     total   = _stats["total_analises"]
-    custo   = _stats["custo_usd_total"]
     hoje    = _stats["analises_hoje"]
-    rest    = max(0, LIMITE_DIARIO - hoje)
-    pct     = round(hoje / LIMITE_DIARIO * 100)
-    bar_cor = "#2e7d32" if pct < 70 else "#f57c00" if pct < 90 else "#c62828"
-    c_medio = custo / total if total else 0
     hist_n  = len(_historico)
-
-    # segmentos do histórico
-    seg_count: dict = {}
-    for r in _historico:
-        s = r.get("segmento", "Outros")
-        seg_count[s] = seg_count.get(s, 0) + 1
-    seg_rows = "".join(
-        f'<div class="seg-row"><span>{s}</span><span class="seg-n">{n}</span></div>'
-        for s, n in sorted(seg_count.items(), key=lambda x: -x[1])
-    ) or '<p style="color:#bbb;font-size:.85rem;text-align:center;padding:16px 0">Nenhum histórico ainda</p>'
-
-    # linhas de provedores
-    def _tag(m: str) -> str:
-        if m == "parser-local":
-            return '<span class="tag-free">local</span>'
-        return '<span class="tag-free">gratuito</span>' if (":free" in m or "instant" in m) else '<span class="tag-pago">pago</span>'
-
-    prov_rows = "".join(
-        f"<tr><td>{m}<br><small>{_tag(m)}</small></td>"
-        f"<td style='text-align:center'>{p['analises']}</td>"
-        f"<td style='text-align:center'>{p['tokens']:,}</td>"
-        f"<td>US$ {p['custo_usd']:.5f}</td></tr>"
-        for m, p in _stats["por_provedor"].items()
-    ) or '<tr><td colspan="4" style="color:#bbb;text-align:center;padding:18px">Nenhuma análise nesta sessão</td></tr>'
-
-    tok_in  = _stats["tokens_input_total"]
-    tok_out = _stats["tokens_output_total"]
+    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "não informado"
     data_reset = _stats["hoje"]
 
     return f"""<!DOCTYPE html>
@@ -1321,35 +1290,14 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 
 .grid{{display:grid;gap:14px;margin-bottom:14px}}
 .g4{{grid-template-columns:repeat(4,1fr)}}
-.g3{{grid-template-columns:repeat(3,1fr)}}
-.g2{{grid-template-columns:1fr 1fr}}
-@media(max-width:720px){{.g4,.g3{{grid-template-columns:1fr 1fr}}}}
-@media(max-width:460px){{.g4,.g3,.g2{{grid-template-columns:1fr}}}}
+@media(max-width:720px){{.g4{{grid-template-columns:1fr 1fr}}}}
+@media(max-width:460px){{.g4{{grid-template-columns:1fr}}}}
 
 .card{{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px 22px;box-shadow:var(--shadow-sm)}}
 .stat-label{{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin-bottom:8px}}
 .stat-val{{font-size:32px;font-weight:700;color:var(--ink-900);line-height:1;letter-spacing:-.025em;font-variant-numeric:tabular-nums}}
 .stat-val-sm{{font-size:24px;font-weight:700;color:var(--ink-900);line-height:1;letter-spacing:-.015em;font-variant-numeric:tabular-nums}}
 .stat-sub{{font-size:12px;color:var(--fg-4);margin-top:5px;font-variant-numeric:tabular-nums}}
-.stat-suffix{{font-size:17px;color:var(--fg-3);font-weight:500}}
-
-.bar-wrap{{background:var(--ink-150);border-radius:var(--radius-full);height:6px;margin-top:14px;overflow:hidden}}
-.bar{{height:100%;border-radius:var(--radius-full);transition:width .4s var(--ease-out)}}
-
-.sec-title{{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-subtle)}}
-
-table{{width:100%;border-collapse:collapse;font-size:13px}}
-th{{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);background:var(--ink-50);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)}}
-td{{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border-subtle);vertical-align:middle;color:var(--fg-1);font-variant-numeric:tabular-nums}}
-tr:last-child td{{border-bottom:none}}
-tr:hover td{{background:var(--ink-50)}}
-
-.seg-row{{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border-subtle);font-size:13px;color:var(--fg-2)}}
-.seg-row:last-child{{border-bottom:none}}
-.seg-n{{font-weight:600;color:var(--brand-600);background:var(--brand-50);padding:2px 10px;border-radius:var(--radius-full);font-size:12px;font-variant-numeric:tabular-nums}}
-
-.tag-free{{background:var(--success-100);color:var(--success-700);font-size:11px;padding:2px 8px;border-radius:var(--radius-full);font-weight:600}}
-.tag-pago{{background:var(--warn-50);color:var(--warn-700);font-size:11px;padding:2px 8px;border-radius:var(--radius-full);font-weight:600}}
 
 .footer-note{{text-align:right;font-size:12px;color:var(--fg-4);margin-top:12px;font-variant-numeric:tabular-nums}}
 </style>
@@ -1373,14 +1321,8 @@ tr:hover td{{background:var(--ink-50)}}
   <div class="grid g4">
     <div class="card">
       <div class="stat-label">Análises hoje</div>
-      <div class="stat-val">{hoje}<span class="stat-suffix"> / {LIMITE_DIARIO}</span></div>
-      <div class="bar-wrap"><div class="bar" style="width:{pct}%;background:{bar_cor}"></div></div>
-      <div class="stat-sub">{pct}% do limite diário</div>
-    </div>
-    <div class="card">
-      <div class="stat-label">Restantes hoje</div>
-      <div class="stat-val" style="color:{bar_cor}">{rest}</div>
-      <div class="stat-sub">análises disponíveis</div>
+      <div class="stat-val">{hoje}</div>
+      <div class="stat-sub">análises processadas hoje</div>
     </div>
     <div class="card">
       <div class="stat-label">Total na sessão</div>
@@ -1392,37 +1334,10 @@ tr:hover td{{background:var(--ink-50)}}
       <div class="stat-val">{hist_n}</div>
       <div class="stat-sub">análises no arquivo</div>
     </div>
-  </div>
-
-  <div class="grid g3">
     <div class="card">
-      <div class="stat-label">Custo total (sessão)</div>
-      <div class="stat-val-sm">US$ {custo:.4f}</div>
-      <div class="stat-sub">R$ {custo * 5.75:.2f} · câmbio 5,75</div>
-    </div>
-    <div class="card">
-      <div class="stat-label">Custo médio / análise</div>
-      <div class="stat-val-sm">US$ {c_medio:.4f}</div>
-      <div class="stat-sub">R$ {c_medio * 5.75:.4f}</div>
-    </div>
-    <div class="card">
-      <div class="stat-label">Tokens consumidos</div>
-      <div class="stat-val-sm">{tok_in + tok_out:,}</div>
-      <div class="stat-sub">{tok_in:,} entrada &nbsp;·&nbsp; {tok_out:,} saída</div>
-    </div>
-  </div>
-
-  <div class="grid g2">
-    <div class="card">
-      <div class="sec-title">Por provedor — sessão atual</div>
-      <table>
-        <thead><tr><th>Modelo</th><th style="text-align:center">Análises</th><th style="text-align:right">Tokens</th><th style="text-align:right">Custo</th></tr></thead>
-        <tbody>{prov_rows}</tbody>
-      </table>
-    </div>
-    <div class="card">
-      <div class="sec-title">Histórico por segmento</div>
-      {seg_rows}
+      <div class="stat-label">Versão vigente</div>
+      <div class="stat-val-sm">{APP_VERSION_LABEL}</div>
+      <div class="stat-sub">commit {APP_COMMIT_LABEL} · deploy {deploy_label}</div>
     </div>
   </div>
 
