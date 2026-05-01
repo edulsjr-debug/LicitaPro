@@ -263,9 +263,32 @@ def extrair_orgao(texto: str) -> str:
         (r"(?:nome|razao\s+social)\s*[:\-]\s*([^\n]{5,180})", True),
     ]
     for padrao, precisa_prefixo in etiquetas:
-        valor = _primeiro_grupo(padrao, cabecalho)
+        match = re.search(padrao, cabecalho, re.IGNORECASE)
+        if not match:
+            continue
+        valor = _limpar_linha(match.group(1) if match.groups() else match.group(0))
         if not _is_identificado(valor):
             continue
+        valor = _limpar_linha(
+            re.split(
+                r"\b(?:projeto|endere[cç]o|cidade|uf|cnpj|telefone|e-?mail)\b\s*:?",
+                valor,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+        )
+        if _normalizar(valor).endswith(" para"):
+            for prox in cabecalho[match.end():].splitlines()[:4]:
+                prox_limpa = _limpar_linha(prox)
+                prox_norm = _normalizar(prox_limpa)
+                if not prox_limpa:
+                    continue
+                if re.match(r"^(projeto|endereco|cidade|uf|cnpj|telefone|e-?mail)\b", prox_norm):
+                    break
+                valor = _limpar_linha(f"{valor} {prox_limpa}")
+                break
+        if "instituto interamericano de cooperacao para a agricultura" in _normalizar(valor):
+            valor = "INSTITUTO INTERAMERICANO DE COOPERAÇÃO PARA A AGRICULTURA"
         if precisa_prefixo:
             val_norm = _normalizar(valor)
             if not any(val_norm.startswith(p) for p in ORGAO_PREFIXOS):
@@ -486,19 +509,97 @@ def extrair_valor(texto: str) -> str:
     return candidatos[0][2]
 
 def extrair_data_abertura(texto: str) -> str:
-    datas = []
+    datas: list[tuple[int, str]] = []
+    texto_norm = _normalizar(texto)
+    anos_edital = re.findall(
+        r"\b(?:edital|pregao|processo|srp|pe|cp|tp|cc)\s*(?:n[ºo.]*)?\s*\d{1,5}[./-](20\d{2})\b",
+        texto_norm[:6000],
+        re.IGNORECASE,
+    )
+    ano_referencia = anos_edital[0] if anos_edital else ""
+    positivos_fortes = [
+        "data de abertura",
+        "abertura da sessao",
+        "abertura das propostas",
+        "sessao publica",
+        "inicio da sessao",
+        "sessao de disputa",
+        "inicio da disputa",
+        "recebimento das propostas",
+        "recebimento de propostas",
+        "recebimento da proposta",
+        "apresentacao das propostas",
+        "apresentacao de propostas",
+        "entrega das propostas",
+        "entrega de propostas",
+        "data limite",
+        "data de entrega",
+        "prazo para apresentacao",
+        "prazo de apresentacao",
+        "prazo para envio",
+        "prazo de envio",
+        "limite para recebimento",
+        "envio de proposta",
+        "propostas ate",
+        "realizacao do certame",
+    ]
+    positivos_medios = ["abertura", "sessao", "propostas", "certame", "disputa", "lances"]
+    negativos = [
+        "publicacao",
+        "publicado",
+        "assinatura",
+        "emissao",
+        "vigencia",
+        "lei",
+        "decreto",
+        "portaria",
+        "resolucao",
+        "instrucao normativa",
+        "referencia",
+        "data base",
+        "reajuste",
+        "validade",
+        "contrato",
+        "edicao",
+        "expedido",
+        "atualizacao",
+    ]
     padrao = r"\d{1,2}/\d{1,2}/\d{4}(?:\s*(?:às|as|a partir das|[-–])\s*\d{1,2}[:h]\d{2})?"
     for match in re.finditer(padrao, texto, re.IGNORECASE):
-        contexto = _normalizar(texto[max(0, match.start() - 140) : match.end() + 80])
+        valor = _limpar_linha(match.group(0))
+        contexto = _normalizar(texto[max(0, match.start() - 220) : match.end() + 140])
+        contexto_anterior = _normalizar(texto[max(0, match.start() - 50) : match.start()])
         peso = 0
-        if any(p in contexto for p in ["abertura", "sessao publica", "recebimento das propostas"]):
-            peso += 10
-        if any(p in contexto for p in ["publicacao", "assinatura", "vigencia"]):
-            peso -= 3
-        datas.append((peso, _limpar_linha(match.group(0))))
+        if any(p in contexto for p in positivos_fortes):
+            peso += 18
+        elif any(p in contexto for p in positivos_medios):
+            peso += 7
+        if (
+            match.start() < 4000
+            and re.search(r"\bdata\s*$", contexto_anterior)
+            and any(p in contexto for p in ["comparacao de precos", "shopping numero", "dados do solicitante"])
+        ):
+            peso += 18
+        if (
+            match.start() < 4000
+            and "comparacao de precos" in contexto
+            and "data" in contexto
+            and "dados do solicitante" in contexto
+        ):
+            peso += 14
+        if any(p in contexto for p in negativos):
+            peso -= 12
+        if re.search(r"\d{1,2}[:h]\d{2}", valor):
+            peso += 5
+        ano_match = re.search(r"/(20\d{2})", valor)
+        if ano_referencia and ano_match and ano_match.group(1) == ano_referencia:
+            peso += 3
+        datas.append((peso, valor))
     if not datas:
         return NAO_IDENTIFICADO
     datas.sort(key=lambda item: item[0], reverse=True)
+    if datas[0][0] < 6:
+        return NAO_IDENTIFICADO
     return datas[0][1]
 
 
