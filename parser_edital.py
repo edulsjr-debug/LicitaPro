@@ -287,6 +287,8 @@ def extrair_orgao(texto: str) -> str:
                     break
                 valor = _limpar_linha(f"{valor} {prox_limpa}")
                 break
+        if "instituto interamericano de cooperacao para a agricultura" in _normalizar(valor):
+            valor = "INSTITUTO INTERAMERICANO DE COOPERAÇÃO PARA A AGRICULTURA"
         if precisa_prefixo:
             val_norm = _normalizar(valor)
             if not any(val_norm.startswith(p) for p in ORGAO_PREFIXOS):
@@ -578,6 +580,13 @@ def extrair_data_abertura(texto: str) -> str:
             and any(p in contexto for p in ["comparacao de precos", "shopping numero", "dados do solicitante"])
         ):
             peso += 18
+        if (
+            match.start() < 4000
+            and "comparacao de precos" in contexto
+            and "data" in contexto
+            and "dados do solicitante" in contexto
+        ):
+            peso += 14
         if any(p in contexto for p in negativos):
             peso -= 12
         if re.search(r"\d{1,2}[:h]\d{2}", valor):
