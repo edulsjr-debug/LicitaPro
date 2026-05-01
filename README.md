@@ -44,6 +44,7 @@ Sistema web de análise de editais de licitação com IA. Processa PDFs e docume
 - Tokens consumidos (entrada e saída)
 - Breakdown por provedor de IA
 - Histórico por segmento
+- Versão vigente e commit do deploy
 
 ---
 
@@ -60,6 +61,52 @@ O sistema usa múltiplos provedores com fallback automático:
 - Editais pequenos (até ~15 mil caracteres) → provedores **gratuitos**
 - Editais grandes → **OpenAI** como prioridade (melhor qualidade)
 - Se todos os provedores estiverem ocupados, o sistema informa o tempo de espera
+
+---
+
+## Parser local sem API
+
+O LicitaPRO pode tentar extrair campos do edital localmente antes de chamar provedores de IA. Esse modo reduz custo e dependencia externa, mas mantem a API como fallback quando a confianca do parser for baixa.
+
+Variaveis:
+
+```env
+USAR_PARSER_LOCAL=true
+PARSER_FALLBACK_API=true
+PARSER_MIN_CONFIANCA=70
+```
+
+Com `PARSER_FALLBACK_API=true`, o fluxo e:
+
+```text
+parser local com confianca suficiente -> salva ficha sem custo de API
+parser local com baixa confianca      -> chama OpenAI/Groq/OpenRouter
+```
+
+Detalhes: [`PROPOSTA_SEM_API.md`](PROPOSTA_SEM_API.md)
+
+---
+
+## OCR no upload
+
+Quando um PDF vem escaneado ou com pouco texto extraível, o upload tenta OCR automaticamente antes de salvar o texto para análise.
+
+Variaveis:
+
+```env
+OCR_HABILITADO=true
+OCR_MIN_CHAR=120
+OCR_MAX_PAGINAS=20
+OCR_DPI=220
+```
+
+O fluxo e:
+
+```text
+PDF -> texto nativo -> OCR por pagina se o texto vier fraco -> analise
+```
+
+O OCR e aplicado no proprio processo de upload, sem etapa manual.
 
 ---
 
@@ -82,9 +129,11 @@ Crie o arquivo `.env` na raiz do projeto:
 
 ```
 OPENAI_API_KEY=sua_chave
+GEMINI_API_KEY=sua_chave
 OPENROUTER_API_KEY=sua_chave
 GROQ_API_KEY=sua_chave
 GROQ_API_KEY2=sua_chave
+PARSER_MAX_CHARS_FALLBACK=80000
 ```
 
 Inicie o servidor:
@@ -133,6 +182,12 @@ master branch  →  deploy automático em licitapro-0brh.onrender.com
 
 Nunca subir alterações direto no `master` sem testar no `dev` antes.
 
+## Versão e release notes
+
+- A versão vigente aparece no `/status` e no rodapé lateral da aplicação.
+- O deploy pode expor `APP_VERSION`, `APP_CHANNEL`, `APP_COMMIT` e `APP_DEPLOYED_AT`.
+- As melhorias visíveis ao usuário ficam resumidas em `RELEASES.md`.
+
 ---
 
 ## Deploy (Render)
@@ -144,16 +199,22 @@ O repositório já inclui `render.yaml` configurado.
 | Variável | Descrição |
 |---|---|
 | `OPENAI_API_KEY` | Chave da OpenAI |
+| `GEMINI_API_KEY` | Chave do Google Gemini (AI Studio) |
 | `OPENROUTER_API_KEY` | Chave do OpenRouter |
 | `GROQ_API_KEY` | Chave do Groq (conta 1) |
 | `GROQ_API_KEY2` | Chave do Groq (conta 2) |
+| `APP_VERSION` | Versão publicada do deploy |
+| `APP_CHANNEL` | Canal do deploy (`dev` ou `production`) |
+| `APP_COMMIT` | Commit curto do build atual |
+| `APP_DEPLOYED_AT` | Data/hora do deploy, se informada |
+| `PARSER_MAX_CHARS_FALLBACK` | Tamanho máximo do texto para permitir fallback por API |
 | `DATABASE_URL` | Connection string do Supabase (PostgreSQL) |
 
 **Passos para novo ambiente:**
 1. Acesse [render.com](https://render.com) → **New → Web Service**
 2. Conecte o repositório `edulsjr-debug/LicitaPro`
 3. Selecione o branch desejado (`master` para produção, `dev` para teste)
-4. Preencha as 5 variáveis de ambiente acima
+4. Preencha as variáveis de ambiente acima
 5. Clique em **Deploy**
 6. Adicione monitor no [UptimeRobot](https://uptimerobot.com) para manter o serviço ativo
 
