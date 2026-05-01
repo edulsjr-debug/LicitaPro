@@ -1,8 +1,11 @@
+import asyncio
 import io
 import json
 import os
 import re
 import uuid
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import openai
@@ -87,6 +90,7 @@ _CUSTO = {
 _openai = openai.AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
 )
+_gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 _openrouter = openai.AsyncOpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1",
@@ -999,6 +1003,8 @@ MAX_CHARS = 400_000
 LIMITE_PEQUENO = 15_000  # chars — abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
+    ("gemini", "gemini-2.5-flash-lite",                    400_000),
+    ("gemini", "gemini-2.0-flash-lite",                    400_000),
     (_openrouter, "meta-llama/llama-3.3-70b-instruct:free",  400_000),
     (_openrouter, "google/gemma-3-27b-it:free",              400_000),
     (_openrouter, "google/gemma-4-26b-a4b-it:free",          400_000),
@@ -1010,6 +1016,8 @@ PROVEDORES_PEQUENO = [
 ]
 
 PROVEDORES_GRANDE = [
+    ("gemini", "gemini-2.5-flash-lite",                    400_000),
+    ("gemini", "gemini-2.0-flash-lite",                    400_000),
     (_openai,     "gpt-4.1-nano",                            400_000),
     (_openrouter, "google/gemma-3-12b-it:free",              400_000),
     (_openrouter, "google/gemma-3-27b-it:free",              400_000),
@@ -1021,11 +1029,89 @@ PROVEDORES_GRANDE = [
 ]
 
 
+async def _chamar_gemini_http(texto: str, num_docs: int, modelo: str) -> str:
+    if not _gemini_api_key:
+        raise HTTPException(503, "GEMINI_API_KEY nao configurada.")
+
+    texto_truncado = texto[:400_000]
+    user_prompt = USER_TEMPLATE.format(num_docs=num_docs, texto=texto_truncado)
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": f"{SYSTEM_PROMPT}\n\n{user_prompt}"}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8192,
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": _gemini_api_key,
+        },
+        method="POST",
+    )
+
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return resp.read().decode("utf-8")
+
+    try:
+        raw = await asyncio.to_thread(_do_request)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        raise HTTPException(e.code, f"Erro ao chamar Gemini: {body or str(e)}")
+    except urllib.error.URLError as e:
+        raise HTTPException(500, f"Erro de conexao com Gemini: {e.reason}")
+
+    data = json.loads(raw)
+    candidatos = data.get("candidates") or []
+    if not candidatos:
+        raise HTTPException(503, "Gemini retornou resposta vazia.")
+    parts = (
+        candidatos[0]
+        .get("content", {})
+        .get("parts", [])
+    )
+    ficha = "".join(part.get("text", "") for part in parts).strip()
+    if not ficha:
+        raise HTTPException(503, "Gemini retornou texto vazio.")
+    idx = ficha.find("## FICHA")
+    if idx > 0:
+        ficha = ficha[idx:]
+    return ficha
+
+
 async def chamar_groq(texto: str, num_docs: int) -> str:
     ultimo_erro = ""
     provedores = PROVEDORES_PEQUENO if len(texto) <= LIMITE_PEQUENO else PROVEDORES_GRANDE
 
     for cliente, modelo, max_chars in provedores:
+        if cliente == "gemini":
+            try:
+                ficha = await _chamar_gemini_http(texto[:max_chars], num_docs, modelo)
+                if ficha.startswith("## FICHA"):
+                    _stats["total_analises"] += 1
+                    p = _stats["por_provedor"].setdefault(
+                        modelo,
+                        {"analises": 0, "tokens": 0, "custo_usd": 0.0},
+                    )
+                    p["analises"] += 1
+                    return ficha
+                ultimo_erro = f"Modelo {modelo} nao seguiu o formato esperado"
+                continue
+            except HTTPException as e:
+                if e.status_code in (400, 401, 402, 404, 413, 429, 503):
+                    ultimo_erro = "alguns minutos"
+                    continue
+                raise
+
         texto_truncado = texto[:max_chars]
         user_prompt = USER_TEMPLATE.format(num_docs=num_docs, texto=texto_truncado)
         try:

@@ -128,6 +128,7 @@ Crie o arquivo `.env` na raiz do projeto:
 
 ```
 OPENAI_API_KEY=sua_chave
+GEMINI_API_KEY=sua_chave
 OPENROUTER_API_KEY=sua_chave
 GROQ_API_KEY=sua_chave
 GROQ_API_KEY2=sua_chave
@@ -190,6 +191,7 @@ O repositório já inclui `render.yaml` configurado.
 | Variável | Descrição |
 |---|---|
 | `OPENAI_API_KEY` | Chave da OpenAI |
+| `GEMINI_API_KEY` | Chave do Google Gemini (AI Studio) |
 | `OPENROUTER_API_KEY` | Chave do OpenRouter |
 | `GROQ_API_KEY` | Chave do Groq (conta 1) |
 | `GROQ_API_KEY2` | Chave do Groq (conta 2) |
