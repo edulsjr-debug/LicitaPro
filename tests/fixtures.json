@@ -15,7 +15,7 @@
         "valor":         { "contem": ["14.133"] },
         "data_abertura": { "contem": ["13/04/2026"] },
         "modalidade":    "Pregão Eletrônico",
-        "segmento":      "Transporte",
+        "segmento":      "Viagens e Passagens",
         "confianca":     { "min": 85 },
         "score":         { "min": 15, "max": 45 }
       },
@@ -35,7 +35,7 @@
         "orgao":         { "contem": ["INSTITUTO", "INTERAMERICANO"] },
         "valor":         { "contem": ["250.000"] },
         "data_abertura": { "contem": ["09/04/2026"] },
-        "segmento":      "Transporte",
+        "segmento":      "Viagens e Passagens",
         "confianca":     { "min": 70 },
         "score":         { "min": 30, "max": 55 }
       },
@@ -54,12 +54,13 @@
         "numero_edital": { "contem": ["02/2026"] },
         "orgao":         { "contem": ["CONSELHO", "PSICOLOGIA"] },
         "modalidade":    "Pregão Eletrônico",
-        "segmento":      "Transporte",
+        "segmento":      "Viagens e Passagens",
         "confianca":     { "min": 70 },
-        "score":         { "min": 15, "max": 40 }
+        "score":         { "min": 20, "max": 45 }
       },
       "nao_esperado": {
-        "orgao": ["Não identificado"]
+        "orgao": ["Não identificado"],
+        "valor": ["R$ 0,01", "R$ 0.01"]
       }
     }
   ]
