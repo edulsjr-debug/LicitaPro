@@ -132,6 +132,7 @@ GEMINI_API_KEY=sua_chave
 OPENROUTER_API_KEY=sua_chave
 GROQ_API_KEY=sua_chave
 GROQ_API_KEY2=sua_chave
+PARSER_MAX_CHARS_FALLBACK=80000
 ```
 
 Inicie o servidor:
@@ -195,6 +196,7 @@ O repositório já inclui `render.yaml` configurado.
 | `OPENROUTER_API_KEY` | Chave do OpenRouter |
 | `GROQ_API_KEY` | Chave do Groq (conta 1) |
 | `GROQ_API_KEY2` | Chave do Groq (conta 2) |
+| `PARSER_MAX_CHARS_FALLBACK` | Tamanho máximo do texto para permitir fallback por API |
 | `DATABASE_URL` | Connection string do Supabase (PostgreSQL) |
 
 **Passos para novo ambiente:**
