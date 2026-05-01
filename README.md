@@ -86,6 +86,29 @@ Detalhes: [`PROPOSTA_SEM_API.md`](PROPOSTA_SEM_API.md)
 
 ---
 
+## OCR no upload
+
+Quando um PDF vem escaneado ou com pouco texto extraível, o upload tenta OCR automaticamente antes de salvar o texto para análise.
+
+Variaveis:
+
+```env
+OCR_HABILITADO=true
+OCR_MIN_CHAR=120
+OCR_MAX_PAGINAS=20
+OCR_DPI=220
+```
+
+O fluxo e:
+
+```text
+PDF -> texto nativo -> OCR por pagina se o texto vier fraco -> analise
+```
+
+O OCR e aplicado no proprio processo de upload, sem etapa manual.
+
+---
+
 ## Instalação local
 
 **Pré-requisitos:** Python 3.9+
