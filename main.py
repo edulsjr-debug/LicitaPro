@@ -66,6 +66,10 @@ try:
     OCR_DPI = int(os.getenv("OCR_DPI", "220"))
 except ValueError:
     OCR_DPI = 220
+try:
+    OCR_MAX_FILE_BYTES = int(os.getenv("OCR_MAX_FILE_BYTES", "819200"))  # 800 KB
+except ValueError:
+    OCR_MAX_FILE_BYTES = 819200
 
 _OCR_ENGINE = None
 
@@ -742,8 +746,11 @@ def _ocr_pagina_pdf(doc, pagina_idx: int) -> str:
 def _extrair_texto_pdf(conteudo: bytes) -> str:
     pdf_ocr = None
     ocr_usado = False
+    arquivo_grande = len(conteudo) > OCR_MAX_FILE_BYTES
+    if arquivo_grande:
+        print(f"[OCR] Arquivo {len(conteudo)//1024} KB > limite {OCR_MAX_FILE_BYTES//1024} KB — OCR desativado.")
     try:
-        if fitz is not None and OCR_HABILITADO:
+        if fitz is not None and OCR_HABILITADO and not arquivo_grande:
             pdf_ocr = fitz.open(stream=conteudo, filetype="pdf")
         with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
             partes = []

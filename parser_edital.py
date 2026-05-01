@@ -256,12 +256,15 @@ def extrair_orgao(texto: str) -> str:
 
     for linha in linhas[:40]:
         baixa = _normalizar(linha)
-        if not baixa or len(baixa) < 10 or len(baixa) > 140:
+        if not baixa or len(baixa) > 140:
             continue
-        if baixa == baixa.upper() and len(baixa.split()) >= 2:
+        # linha toda em maiúsculas com 2+ palavras (ex: "CAMARA MUNICIPAL DE FOO")
+        linha_strip = linha.strip()
+        if len(linha_strip) >= 8 and linha_strip == linha_strip.upper() and len(linha_strip.split()) >= 2:
             if not re.search(r"\b(?:edital|aviso|processo|pregao|pregão)\b", baixa):
                 return _limpar_linha(linha)[:180]
-        if re.search(r"\b(iica|onu|unesco|oms|banco|instituto|fundacao|fundação|agencia|agência|associacao|associação)\b", baixa):
+        # sigla/nome de organismo reconhecido (mínimo 3 chars para capturar "IICA")
+        if len(baixa) >= 3 and re.search(r"\b(iica|onu|unesco|oms|banco|instituto|fundacao|fundação|agencia|agência|associacao|associação)\b", baixa):
             return _limpar_linha(linha)[:180]
 
     for padrao in (
