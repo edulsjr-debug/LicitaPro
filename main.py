@@ -1491,7 +1491,11 @@ async def get_ficha_historico(id: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    return HTML_PAGE
+    return (
+        HTML_PAGE
+        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
+        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+    )
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
