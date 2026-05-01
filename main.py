@@ -1068,7 +1068,7 @@ LIMITE_PEQUENO = 15_000  # chars — abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
     ("gemini", "gemini-2.5-flash-lite",                    400_000),
-    ("gemini", "gemini-2.0-flash-lite",                    400_000),
+    ("gemini", "gemini-2.5-flash",                         400_000),
     (_openrouter, "meta-llama/llama-3.3-70b-instruct:free",  400_000),
     (_openrouter, "google/gemma-3-27b-it:free",              400_000),
     (_openrouter, "google/gemma-4-26b-a4b-it:free",          400_000),
@@ -1081,7 +1081,7 @@ PROVEDORES_PEQUENO = [
 
 PROVEDORES_GRANDE = [
     ("gemini", "gemini-2.5-flash-lite",                    400_000),
-    ("gemini", "gemini-2.0-flash-lite",                    400_000),
+    ("gemini", "gemini-2.5-flash",                         400_000),
     (_openai,     "gpt-4.1-nano",                            400_000),
     (_openrouter, "google/gemma-3-12b-it:free",              400_000),
     (_openrouter, "google/gemma-3-27b-it:free",              400_000),
