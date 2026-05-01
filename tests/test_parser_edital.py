@@ -48,6 +48,35 @@ class ParserEditalTest(unittest.TestCase):
         self.assertTrue(resultado["usar_fallback_api"])
         self.assertIn("Confiança baixa", resultado["ficha"])
 
+    def test_nao_usa_taxa_simbolica_como_valor_total(self):
+        texto = """
+        CONSELHO REGIONAL DE PSICOLOGIA
+        PREGÃO ELETRÔNICO Nº 02/2026
+        Objeto: contratação de empresa para agenciamento de viagens.
+        A proposta deverá considerar taxa de agenciamento no valor mínimo de R$ 0,01
+        por bilhete emitido, conforme planilha de lances.
+        """
+
+        resultado = analisar_sem_api(texto)
+
+        self.assertEqual(resultado["valor"], "Não identificado")
+        self.assertEqual(resultado["segmento"], "Viagens e Passagens")
+
+    def test_identifica_comparacao_de_precos(self):
+        texto = """
+        INSTITUTO INTERAMERICANO DE COOPERACAO PARA A AGRICULTURA
+        COMPARAÇÃO DE PREÇOS CP 71.2026
+        Objeto: emissão de passagens aéreas nacionais e internacionais.
+        Valor estimado total: R$ 250.000,00
+        Data de abertura: 09/04/2026
+        """
+
+        resultado = analisar_sem_api(texto)
+
+        self.assertEqual(resultado["modalidade"], "Comparação de Preços")
+        self.assertEqual(resultado["segmento"], "Viagens e Passagens")
+        self.assertEqual(resultado["valor"], "R$ 250.000,00")
+
 
 if __name__ == "__main__":
     unittest.main()
