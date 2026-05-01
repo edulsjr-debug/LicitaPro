@@ -977,10 +977,21 @@ _SEGMENTOS = [
 ]
 
 def detectar_segmento(texto: str) -> str:
+    # Prioridade 1: linha de score da ficha "- Segmento X: N/40 pts"
+    m = re.search(r'Segmento\s+([^\n:]+?):\s*\d+/40', texto)
+    if m:
+        seg_nome = m.group(1).strip()
+        for nome, _ in _SEGMENTOS:
+            if nome.lower() in seg_nome.lower() or seg_nome.lower() in nome.lower():
+                return nome
+    # Prioridade 2: contagem de matches por segmento (evita falso positivo por primeiro match)
     t = texto.lower()
+    contagens: dict[str, int] = {}
     for nome, palavras in _SEGMENTOS:
-        if any(p in t for p in palavras):
-            return nome
+        contagens[nome] = sum(1 for p in palavras if p in t)
+    melhor = max(contagens, key=lambda n: contagens[n])
+    if contagens[melhor] > 0:
+        return melhor
     return "Outros"
 
 def extrair_campo(ficha: str, campo: str) -> str:
@@ -1006,12 +1017,14 @@ def extrair_objeto(ficha: str) -> str:
     return "Não informado"
 
 def extrair_score(ficha: str) -> int:
-    m = re.search(r'\*\*Score:\*\*\s*(\d+)', ficha)
-    if m:
-        try:
-            return max(0, min(100, int(m.group(1))))
-        except Exception:
-            pass
+    # Captura "Score de Viabilidade: 55/100" e também "**Score:** 55" (formato antigo)
+    for pat in (r'Score[^:]*:\*?\*?\s*(\d+)/100', r'\*\*Score:\*\*\s*(\d+)'):
+        m = re.search(pat, ficha)
+        if m:
+            try:
+                return max(0, min(100, int(m.group(1))))
+            except Exception:
+                pass
     return 0
 
 def _eh_ficha(texto: str) -> bool:
@@ -1269,18 +1282,21 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
         raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
 
     texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
-    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API and not texto_longo:
-        print(
-            "[PARSER] Confiança baixa "
-            f"({resultado.get('confianca', 0)}%). Usando fallback por API."
-        )
-        return await chamar_groq(texto, num_docs)
-
-    if resultado.get("usar_fallback_api") and texto_longo:
-        print(
-            "[PARSER] Documento longo demais para fallback automático; "
-            "mantendo saída do parser local para evitar timeout."
-        )
+    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+        # Para documentos longos, trunca antes de enviar para IA (60% início + 40% fim)
+        if texto_longo:
+            corte = int(PARSER_MAX_CHARS_FALLBACK * 0.60)
+            texto_api = texto[:corte] + "\n\n[...trecho omitido...]\n\n" + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
+            print(
+                f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%), doc longo "
+                f"({len(texto)} chars) — truncado para fallback API."
+            )
+        else:
+            texto_api = texto
+            print(
+                f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%). Usando fallback por API."
+            )
+        return await chamar_groq(texto_api, num_docs)
 
     # enriquecimento: BrasilAPI CNPJ → razão social oficial
     cnpj_extraido = resultado.get("cnpj", "")
