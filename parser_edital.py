@@ -453,8 +453,8 @@ def gerar_ficha(campos: dict[str, Any]) -> str:
             + "."
         )
     if campos.get("usar_fallback_api"):
-        alertas.append("> Confiança baixa para análise local; recomenda-se fallback por IA.")
-    alertas_md = "\n\n".join(alertas) if alertas else "> Nenhum alerta automático identificado pelo parser local."
+        alertas.append("> Confiança baixa na extração automática; usar análise por IA como complemento.")
+    alertas_md = "\n\n".join(alertas) if alertas else "> Nenhum alerta automático identificado."
 
     return f"""## FICHA DE LICITAÇÃO
 
@@ -504,13 +504,10 @@ def gerar_ficha(campos: dict[str, Any]) -> str:
 ## Score de Viabilidade
 **Score:** {campos.get('score', 0)}
 **Nível:** {campos.get('nivel', 'Média')}
-**Justificativa:** Ficha gerada por extração determinística local. Confiança do parser: {campos.get('confianca', 0)}%.
-
-## Análise de Exigências
-[warn] Revisão manual recomendada — o parser local identifica documentos, mas não substitui análise jurídica de risco.
+**Justificativa:** Campos principais extraídos automaticamente. Confiança da extração: {campos.get('confianca', 0)}%.
 
 ---
-*Fonte: parser local sem API. Processado em {datetime.now().strftime('%d/%m/%Y %H:%M')}.*
+*Fonte: extração automática sem API. Processado em {datetime.now().strftime('%d/%m/%Y %H:%M')}.*
 """.strip()
 
 

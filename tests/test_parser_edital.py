@@ -38,6 +38,8 @@ class ParserEditalTest(unittest.TestCase):
         self.assertEqual(resultado["valor"], "R$ 150.000,00")
         self.assertIn("15/05/2026", resultado["data_abertura"])
         self.assertIn("## FICHA DE LICITAÇÃO", resultado["ficha"])
+        self.assertNotIn("Revisão manual recomendada", resultado["ficha"])
+        self.assertNotIn("não substitui análise jurídica", resultado["ficha"])
 
     def test_baixa_confianca_aciona_fallback(self):
         resultado = analisar_sem_api("Documento sem estrutura reconhecivel.", min_confianca=70)
