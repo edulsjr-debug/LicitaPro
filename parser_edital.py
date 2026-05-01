@@ -9,6 +9,7 @@ NAO_INFORMADO = "Não informado"
 
 
 MODALIDADES = [
+    ("Comparação de Preços", ["comparacao de precos", "comparacao de preco"]),
     ("Pregão Eletrônico", ["pregao eletronico", "pregao eletrônico"]),
     ("Pregão Presencial", ["pregao presencial", "pregão presencial"]),
     ("Concorrência Eletrônica", ["concorrencia eletronica", "concorrência eletrônica"]),
@@ -105,7 +106,8 @@ SEGMENTOS = [
     ),
     ("Saúde", ["saude", "hospital", "medicamento", "medico", "ambulatorial"]),
     ("Alimentação", ["alimentacao", "refeicao", "merenda", "generos alimenticios"]),
-    ("Transporte", ["transporte", "veiculo", "frota", "combustivel", "fretamento", "passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "bilhetes aereos"]),
+    ("Viagens e Passagens", ["passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "bilhetes aereos", "seguro viagem", "hospedagem"]),
+    ("Transporte", ["transporte", "veiculo", "frota", "combustivel", "fretamento"]),
 ]
 
 
@@ -393,11 +395,23 @@ def _valor_float(valor: str) -> float:
 
 def extrair_valor(texto: str) -> str:
     texto_norm = _normalizar(texto)
+    contexto_valor_forte = [
+        "valor estimado total", "valor total estimado", "valor global",
+        "valor estimado da contratacao", "valor da contratacao",
+        "valor maximo estimado", "valor maximo global", "orcamento estimado",
+    ]
     contexto_valor = [
-        "valor estimado", "valor global", "valor total estimado",
+        *contexto_valor_forte,
+        "valor estimado",
         "preco maximo", "preco de referencia", "valor de referencia",
         "valor maximo", "custo estimado", "orcamento", "dotacao",
         "estimativa", "valor anual", "valor mensal", "valor total",
+    ]
+    contexto_parcial = [
+        "taxa de agenciamento", "taxa administrativa", "taxa de administracao",
+        "valor da taxa", "percentual", "maior desconto", "desconto",
+        "valor unitario", "unitario", "por bilhete", "por item", "itens",
+        "lance minimo", "valor minimo",
     ]
     padroes = [
         re.compile(r"(?:r\$|rs)\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?|[\d]+(?:,\d{2})?)", re.IGNORECASE),
@@ -417,13 +431,26 @@ def extrair_valor(texto: str) -> str:
 
     def score_contexto(contexto: str) -> int:
         score = 0
+        if any(kw in contexto for kw in contexto_valor_forte):
+            score += 18
         if any(kw in contexto for kw in contexto_valor):
             score += 10
-        if any(kw in contexto for kw in ("valor unitario", "unitario", "mensal", "por item", "itens")):
-            score -= 4
+        if any(kw in contexto for kw in contexto_parcial):
+            score -= 14
         if any(kw in contexto for kw in ("r$", "rs", "reais")):
             score += 2
         return score
+
+    def aceitar_candidato(contexto: str, num: float) -> bool:
+        if num <= 0:
+            return False
+        if num < 100:
+            return False
+        forte = any(kw in contexto for kw in contexto_valor_forte)
+        parcial = any(kw in contexto for kw in contexto_parcial)
+        if parcial and not forte:
+            return False
+        return True
 
     candidatos: list[tuple[int, float, str]] = []
     for ctx in contexto_valor:
@@ -436,7 +463,7 @@ def extrair_valor(texto: str) -> str:
             for padrao in padroes:
                 for m in padrao.finditer(janela):
                     num = parse_valor_numerico(m.group(1))
-                    if num <= 0:
+                    if not aceitar_candidato(janela_norm, num):
                         continue
                     candidatos.append((score_contexto(janela_norm), num, f"R$ {m.group(1)}"))
             pos = texto_norm.find(ctx, pos + 1)
@@ -448,7 +475,7 @@ def extrair_valor(texto: str) -> str:
                 fim = min(len(texto), m.end() + 80)
                 contexto = texto_norm[inicio:fim]
                 num = parse_valor_numerico(m.group(1))
-                if num <= 0:
+                if not aceitar_candidato(contexto, num):
                     continue
                 candidatos.append((score_contexto(contexto), num, f"R$ {m.group(1)}"))
 
@@ -548,7 +575,8 @@ def extrair_documentos_habilitacao(texto: str, secoes: Optional[dict[str, str]] 
 
 _SEGMENTOS_ESPECIFICOS = [
     # termos inequívocos que valem mais que qualquer coincidência genérica
-    ("Transporte", ["passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "fretamento de aeronave"]),
+    ("Viagens e Passagens", ["passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "bilhetes aereos", "seguro viagem", "hospedagem"]),
+    ("Transporte", ["fretamento de aeronave", "locacao de veiculo", "transporte de passageiros"]),
     ("Segurança", ["vigilancia patrimonial", "portaria remota", "monitoramento eletronico", "circuito fechado"]),
     ("Limpeza e Conservação", ["limpeza e conservacao", "asseio e conservacao", "servicos de limpeza"]),
     ("Manutenção", ["manutencao predial", "manutencao eletrica", "manutencao hidraulica"]),
@@ -592,6 +620,7 @@ def calcular_score_viabilidade(campos: dict[str, Any]) -> tuple[int, str, list[s
     segmento = campos.get("segmento", "Outros")
     pts_seg = {
         "Segurança": 40, "Limpeza e Conservação": 35, "Manutenção": 25,
+        "Viagens e Passagens": 20,
         "Obras e Infraestrutura": 10, "Tecnologia e TI": 8,
         "Transporte": 6, "Saúde": 5, "Alimentação": 5, "Outros": 5,
     }.get(segmento, 5)
