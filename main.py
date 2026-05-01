@@ -654,7 +654,7 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
 
 
 # ── Histórico de análises ────────────────────────────────────────────────────
-HISTORICO_FILE = Path("historico.json")
+HISTORICO_FILE = Path(os.getenv("HISTORICO_FILE") or "historico.json")
 _DATABASE_URL = os.getenv("DATABASE_URL")
 
 def _db_conn():
@@ -731,6 +731,7 @@ def _salvar_historico():
         except Exception as e:
             print(f"[DB] Erro ao salvar histórico: {e}")
     try:
+        HISTORICO_FILE.parent.mkdir(parents=True, exist_ok=True)
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -1185,6 +1186,10 @@ async def get_ficha_historico(id: str):
 async def root():
     return HTML_PAGE
 
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}
+
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
 async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
@@ -1237,4 +1242,4 @@ async def analisar(request: AnalisarRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
