@@ -70,6 +70,10 @@ try:
     OCR_MAX_FILE_BYTES = int(os.getenv("OCR_MAX_FILE_BYTES", "819200"))  # 800 KB
 except ValueError:
     OCR_MAX_FILE_BYTES = 819200
+try:
+    MAX_PAGINAS_GRANDES = int(os.getenv("MAX_PAGINAS_GRANDES", "15"))
+except ValueError:
+    MAX_PAGINAS_GRANDES = 15
 APP_VERSION = os.getenv("APP_VERSION", "dev")
 APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
 APP_COMMIT = os.getenv("APP_COMMIT", "local")
@@ -764,7 +768,8 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
             pdf_ocr = fitz.open(stream=conteudo, filetype="pdf")
         with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
             partes = []
-            for indice, p in enumerate(pdf.pages):
+            limite_paginas = MAX_PAGINAS_GRANDES if arquivo_grande else len(pdf.pages)
+            for indice, p in enumerate(pdf.pages[:limite_paginas]):
                 texto = p.extract_text() or ""
                 if not texto.strip():
                     try:
