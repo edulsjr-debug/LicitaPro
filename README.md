@@ -63,6 +63,29 @@ O sistema usa múltiplos provedores com fallback automático:
 
 ---
 
+## Parser local sem API
+
+O LicitaPRO pode tentar extrair campos do edital localmente antes de chamar provedores de IA. Esse modo reduz custo e dependencia externa, mas mantem a API como fallback quando a confianca do parser for baixa.
+
+Variaveis:
+
+```env
+USAR_PARSER_LOCAL=true
+PARSER_FALLBACK_API=true
+PARSER_MIN_CONFIANCA=70
+```
+
+Com `PARSER_FALLBACK_API=true`, o fluxo e:
+
+```text
+parser local com confianca suficiente -> salva ficha sem custo de API
+parser local com baixa confianca      -> chama OpenAI/Groq/OpenRouter
+```
+
+Detalhes: [`PROPOSTA_SEM_API.md`](PROPOSTA_SEM_API.md)
+
+---
+
 ## Instalação local
 
 **Pré-requisitos:** Python 3.9+
