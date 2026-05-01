@@ -40,6 +40,14 @@ ORGAO_PREFIXOS = [
     "empresa publica",
     "servico autonomo",
     "consorcio",
+    "conselho",
+    "agencia",
+    "colegio",
+    "ordem",
+    "fundo",
+    "associacao",
+    "universidade",
+    "hospital",
 ]
 
 SEGMENTOS = [
