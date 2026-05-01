@@ -183,50 +183,95 @@ def identificar_secoes(texto: str) -> dict[str, str]:
 
 
 def extrair_numero_edital(texto: str) -> str:
-    normalizado = _normalizar(texto)
-    padroes = [
+    normalizado = _normalizar(texto[:5000])
+
+    padroes_prioritarios = [
+        re.compile(
+            r"\b((?:pe|cp|tp|cc|rdc)\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{2,4})\b",
+            re.IGNORECASE,
+        ),
         re.compile(
             r"\b((?:pregao(?:\s+eletronico|\s+presencial)?|"
             r"concorrencia(?:\s+eletronica|\s+publica)?|"
             r"tomada\s+de\s+precos?|dispensa(?:\s+eletronica)?|"
             r"inexigibilidade|chamamento\s+publico|credenciamento|"
-            r"rdc|dialogo\s+competitivo|p\.?e\.?|p\.?p\.?|c\.?p\.?|"
-            r"t\.?p\.?|c\.?c\.?|r\.?d\.?c\.?)"
+            r"rdc|dialogo\s+competitivo)"
             r"(?:\s+(?:eletronico|presencial|eletronica|publica))?"
-            r"\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d+[\w./-]*\s*[./-]\s*\d{2,4})\b",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"\b((?:edital|processo(?:\s+administrativo)?)\s*"
-            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d+[\w./-]*\s*[./-]\s*\d{2,4})\b",
+            r"\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{2,4})\b",
             re.IGNORECASE,
         ),
     ]
-    for padrao in padroes:
-        match = padrao.search(normalizado)
-        if match:
-            return _limpar_linha(match.group(1))
+    padroes_secundarios = [
+        re.compile(
+            r"\b((?:edital|processo(?:\s+administrativo)?)\s*"
+            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{4})\b",
+            re.IGNORECASE,
+        ),
+    ]
+
+    def _valido(candidato: str) -> bool:
+        c = _normalizar(candidato)
+        if re.search(r"\bart\.?\s*\d+\.\d+\b", c):
+            return False
+        if re.search(r"\bcl[aá]usula\s*\d+\.\d+\b", c):
+            return False
+        if re.search(r"\bitem\s*\d+\.\d+\b", c):
+            return False
+        return True
+
+    for padroes in (padroes_prioritarios, padroes_secundarios):
+        for padrao in padroes:
+            match = padrao.search(normalizado)
+            if match:
+                candidato = _limpar_linha(match.group(1))
+                if _valido(candidato):
+                    return candidato
+
     return NAO_IDENTIFICADO
 
 def extrair_orgao(texto: str) -> str:
-    linhas = [_limpar_linha(l) for l in texto.splitlines()[:60]]
-    ignorar = ("edital", "pregão", "pregao", "processo", "aviso", "licitação", "licitacao")
+    linhas = [_limpar_linha(l) for l in texto.splitlines()[:80]]
+    ignorar = (
+        "edital", "pregão", "pregao", "processo", "aviso", "licitação",
+        "licitacao", "termo de referencia", "anexo", "objeto",
+    )
 
-    for linha in linhas:
-        if len(linha) < 8 or any(t in linha.lower() for t in ignorar):
-            continue
-        normalizada = _normalizar(linha)
-        if any(normalizada.startswith(prefixo) for prefixo in ORGAO_PREFIXOS):
-            return linha[:160]
-
-    padroes = [
-        r"(?:órgão|orgao|unidade\s+compradora|entidade)\s*[:\-]\s*([^\n]{8,160})",
-        r"([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ][^\n]{8,160})\s*\n\s*CNPJ",
+    etiquetas = [
+        r"(?:órgão|orgao|contratante|unidade\s+compradora|unidade\s+gestora|entidade)\s*[:\-]\s*([^\n]{5,180})",
+        r"(?:órgão|orgao)\s+responsável\s*[:\-]\s*([^\n]{5,180})",
     ]
-    for padrao in padroes:
+    for padrao in etiquetas:
         valor = _primeiro_grupo(padrao, texto)
         if _is_identificado(valor):
-            return valor[:160]
+            return valor[:180]
+
+    for linha in linhas:
+        if len(linha) < 8:
+            continue
+        baixa = _normalizar(linha)
+        if any(t in baixa for t in ignorar):
+            continue
+        if any(baixa.startswith(prefixo) for prefixo in ORGAO_PREFIXOS):
+            return linha[:180]
+
+    for linha in linhas[:40]:
+        baixa = _normalizar(linha)
+        if not baixa or len(baixa) < 10 or len(baixa) > 140:
+            continue
+        if baixa == baixa.upper() and len(baixa.split()) >= 2:
+            if not re.search(r"\b(?:edital|aviso|processo|pregao|pregão)\b", baixa):
+                return _limpar_linha(linha)[:180]
+        if re.search(r"\b(iica|onu|unesco|oms|banco|instituto|fundacao|fundação|agencia|agência|associacao|associação)\b", baixa):
+            return _limpar_linha(linha)[:180]
+
+    for padrao in (
+        r"([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ][^\n]{5,180})\s*\n\s*CNPJ",
+        r"([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ][^\n]{5,180})\s*\n\s*CPF",
+    ):
+        valor = _primeiro_grupo(padrao, texto)
+        if _is_identificado(valor):
+            return valor[:180]
+
     return NAO_IDENTIFICADO
 
 
@@ -323,9 +368,13 @@ def extrair_valor(texto: str) -> str:
         "valor estimado", "valor global", "valor total estimado",
         "preco maximo", "preco de referencia", "valor de referencia",
         "valor maximo", "custo estimado", "orcamento", "dotacao",
-        "estimativa", "valor anual", "valor mensal",
+        "estimativa", "valor anual", "valor mensal", "valor total",
     ]
-    re_valor = re.compile(r"R\$\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?|[\d]+(?:,\d{2})?)", re.IGNORECASE)
+    padroes = [
+        re.compile(r"(?:r\$|rs)\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?|[\d]+(?:,\d{2})?)", re.IGNORECASE),
+        re.compile(r"\b([\d]{1,3}(?:\.[\d]{3})+(?:,\d{2})?)\b", re.IGNORECASE),
+        re.compile(r"\b([\d]{5,}(?:,\d{2})?)\b", re.IGNORECASE),
+    ]
 
     def parse_valor_numerico(s: str) -> float:
         limpo = re.sub(r"[^\d,]", "", s)
@@ -337,19 +386,42 @@ def extrair_valor(texto: str) -> str:
         except ValueError:
             return 0.0
 
-    candidatos: list[tuple[int, float, str]] = []
-    for m in re_valor.finditer(texto):
-        inicio = max(0, m.start() - 120)
-        fim = min(len(texto), m.end() + 40)
-        contexto = texto_norm[inicio:fim]
-        peso = 0
+    def score_contexto(contexto: str) -> int:
+        score = 0
         if any(kw in contexto for kw in contexto_valor):
-            peso += 10
-        if any(kw in contexto for kw in ("valor unitario", "unitario", "mensal", "por item")):
-            peso -= 4
-        num = parse_valor_numerico(m.group(1))
-        if num > 0:
-            candidatos.append((peso, num, f"R$ {m.group(1)}"))
+            score += 10
+        if any(kw in contexto for kw in ("valor unitario", "unitario", "mensal", "por item", "itens")):
+            score -= 4
+        if any(kw in contexto for kw in ("r$", "rs", "reais")):
+            score += 2
+        return score
+
+    candidatos: list[tuple[int, float, str]] = []
+    for ctx in contexto_valor:
+        pos = texto_norm.find(ctx)
+        while pos != -1:
+            inicio = max(0, pos - 80)
+            fim = min(len(texto), pos + 260)
+            janela = texto[inicio:fim]
+            janela_norm = texto_norm[inicio:fim]
+            for padrao in padroes:
+                for m in padrao.finditer(janela):
+                    num = parse_valor_numerico(m.group(1))
+                    if num <= 0:
+                        continue
+                    candidatos.append((score_contexto(janela_norm), num, f"R$ {m.group(1)}"))
+            pos = texto_norm.find(ctx, pos + 1)
+
+    if not candidatos:
+        for padrao in padroes[:2]:
+            for m in padrao.finditer(texto):
+                inicio = max(0, m.start() - 120)
+                fim = min(len(texto), m.end() + 80)
+                contexto = texto_norm[inicio:fim]
+                num = parse_valor_numerico(m.group(1))
+                if num <= 0:
+                    continue
+                candidatos.append((score_contexto(contexto), num, f"R$ {m.group(1)}"))
 
     if not candidatos:
         return NAO_IDENTIFICADO

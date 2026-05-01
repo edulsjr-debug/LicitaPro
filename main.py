@@ -49,6 +49,10 @@ try:
     PARSER_MIN_CONFIANCA = int(os.getenv("PARSER_MIN_CONFIANCA", "70"))
 except ValueError:
     PARSER_MIN_CONFIANCA = 70
+try:
+    PARSER_MAX_CHARS_FALLBACK = int(os.getenv("PARSER_MAX_CHARS_FALLBACK", "80000"))
+except ValueError:
+    PARSER_MAX_CHARS_FALLBACK = 80000
 OCR_HABILITADO = os.getenv("OCR_HABILITADO", "true").lower() not in ("0", "false", "no", "off")
 try:
     OCR_MIN_CHAR = int(os.getenv("OCR_MIN_CHAR", "120"))
@@ -1200,12 +1204,19 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
             return await chamar_groq(texto, num_docs)
         raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
 
-    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+    texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
+    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API and not texto_longo:
         print(
             "[PARSER] Confiança baixa "
             f"({resultado.get('confianca', 0)}%). Usando fallback por API."
         )
         return await chamar_groq(texto, num_docs)
+
+    if resultado.get("usar_fallback_api") and texto_longo:
+        print(
+            "[PARSER] Documento longo demais para fallback automático; "
+            "mantendo saída do parser local para evitar timeout."
+        )
 
     _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
     return resultado["ficha"]
