@@ -1,0 +1,66 @@
+{
+  "versao": "2026-05-01",
+  "nota": "Gabarito de saída esperada do parser para os PDFs de referência. Atualizar sempre que um campo for corrigido e validado em edital real.",
+  "editais_dir": "C:/Users/lisia/Desktop/editais",
+  "fixtures": [
+    {
+      "id": "poco_verde",
+      "arquivo": "2/Edital_PE_N_03.2026___PMPV_assinado.pdf",
+      "tamanho_bytes": 648204,
+      "descricao": "Pregão Eletrônico SRP 03/2026 — Prefeitura Municipal de Poço Verde/SE",
+      "max_paginas": null,
+      "esperado": {
+        "numero_edital": { "contem": ["03/2026", "SRP"] },
+        "orgao":         { "contem": ["VERDE", "PREFEITURA"] },
+        "valor":         { "contem": ["14.133"] },
+        "data_abertura": { "contem": ["13/04/2026"] },
+        "modalidade":    "Pregão Eletrônico",
+        "segmento":      "Transporte",
+        "confianca":     { "min": 85 },
+        "score":         { "min": 15, "max": 45 }
+      },
+      "nao_esperado": {
+        "numero_edital": ["edital. 7.11", "7.11", "Não identificado"],
+        "orgao":         ["atraso", "pagamento", "Não identificado"]
+      }
+    },
+    {
+      "id": "iica",
+      "arquivo": "iica 22 04 26 Edital CP 71.2026 - Emissão de passagens aéreas v publi.pdf",
+      "tamanho_bytes": 591831,
+      "descricao": "Comparação de Preços 71/2026 — IICA (Instituto Interamericano de Cooperação para a Agricultura)",
+      "max_paginas": null,
+      "esperado": {
+        "numero_edital": { "contem": ["71", "2026"] },
+        "orgao":         { "contem": ["INSTITUTO", "INTERAMERICANO"] },
+        "valor":         { "contem": ["250.000"] },
+        "data_abertura": { "contem": ["09/04/2026"] },
+        "segmento":      "Transporte",
+        "confianca":     { "min": 70 },
+        "score":         { "min": 30, "max": 55 }
+      },
+      "nao_esperado": {
+        "orgao": ["Não identificado", "COMPARAÇÃO DE PREÇOS"]
+      }
+    },
+    {
+      "id": "crp_sc",
+      "arquivo": "1/75c2f19d2ef941c1a1b6c1af59f3874e.pdf",
+      "tamanho_bytes": 1640910,
+      "descricao": "Pregão Eletrônico 02/2026 — Conselho Regional de Psicologia 12ª Região (CRP-SC)",
+      "max_paginas": 15,
+      "nota": "PDF de 60 páginas/1.6 MB — limitado a 15 páginas para evitar timeout. Data de abertura e valor real ficam fora do limite.",
+      "esperado": {
+        "numero_edital": { "contem": ["02/2026"] },
+        "orgao":         { "contem": ["CONSELHO", "PSICOLOGIA"] },
+        "modalidade":    "Pregão Eletrônico",
+        "segmento":      "Transporte",
+        "confianca":     { "min": 70 },
+        "score":         { "min": 15, "max": 40 }
+      },
+      "nao_esperado": {
+        "orgao": ["Não identificado"]
+      }
+    }
+  ]
+}
