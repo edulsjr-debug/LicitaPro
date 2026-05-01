@@ -1,0 +1,4 @@
+{$APP_HOST} {
+    encode gzip zstd
+    reverse_proxy licitapro:8000
+}

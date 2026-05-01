@@ -135,6 +135,37 @@ Nunca subir alterações direto no `master` sem testar no `dev` antes.
 
 ---
 
+## Deploy gratuito 24/7 (Oracle Always Free)
+
+Alternativa recomendada ao Render para manter o LicitaPRO sempre ligado sem reescrever a aplicacao:
+
+- VM Ubuntu ARM no Oracle Cloud Always Free
+- Docker Compose para rodar o FastAPI
+- Caddy como reverse proxy
+- HTTPS automatico quando `APP_HOST` for um dominio valido
+- Volume Docker para preservar `historico.json` se `DATABASE_URL` nao estiver configurado
+
+Arquivos adicionados:
+
+| Arquivo | Funcao |
+|---|---|
+| `Dockerfile` | Imagem da aplicacao FastAPI |
+| `compose.yaml` | App + Caddy + volumes persistentes |
+| `deploy/caddy/Caddyfile` | Reverse proxy para o app |
+| `deploy/oracle-always-free.md` | Passo a passo do deploy na VM gratuita |
+
+Resumo:
+
+```bash
+cp .env.example .env
+# preencher APP_HOST e chaves
+docker compose up -d --build
+```
+
+Guia completo: [`deploy/oracle-always-free.md`](deploy/oracle-always-free.md)
+
+---
+
 ## Deploy (Render)
 
 O repositório já inclui `render.yaml` configurado.
@@ -164,6 +195,7 @@ O repositório já inclui `render.yaml` configurado.
 | Método | Rota | Descrição |
 |---|---|---|
 | GET | `/` | Interface principal |
+| GET | `/healthz` | Health check para Docker/Caddy/monitoramento |
 | GET | `/status` | Painel de uso e custos |
 | POST | `/analisar/arquivo` | Analisa arquivos enviados |
 | POST | `/analisar` | Analisa texto direto (JSON) |
