@@ -60,6 +60,7 @@
       },
       "nao_esperado": {
         "orgao": ["Não identificado"],
+        "data_abertura": ["01/01/2025"],
         "valor": ["R$ 0,01", "R$ 0.01"]
       }
     }
