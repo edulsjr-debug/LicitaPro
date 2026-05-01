@@ -40,7 +40,7 @@
         "score":         { "min": 30, "max": 55 }
       },
       "nao_esperado": {
-        "orgao": ["Não identificado", "COMPARAÇÃO DE PREÇOS"]
+        "orgao": ["Não identificado", "PROJETO", "COMPARAÇÃO DE PREÇOS"]
       }
     },
     {
