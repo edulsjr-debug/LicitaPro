@@ -486,19 +486,71 @@ def extrair_valor(texto: str) -> str:
     return candidatos[0][2]
 
 def extrair_data_abertura(texto: str) -> str:
-    datas = []
+    datas: list[tuple[int, str]] = []
+    texto_norm = _normalizar(texto)
+    anos_edital = re.findall(
+        r"\b(?:edital|pregao|processo|srp|pe|cp|tp|cc)\s*(?:n[ºo.]*)?\s*\d{1,5}[./-](20\d{2})\b",
+        texto_norm[:6000],
+        re.IGNORECASE,
+    )
+    ano_referencia = anos_edital[0] if anos_edital else ""
+    positivos_fortes = [
+        "data de abertura",
+        "abertura da sessao",
+        "abertura das propostas",
+        "sessao publica",
+        "inicio da sessao",
+        "sessao de disputa",
+        "inicio da disputa",
+        "recebimento das propostas",
+        "limite para recebimento",
+        "envio de proposta",
+        "propostas ate",
+        "realizacao do certame",
+    ]
+    positivos_medios = ["abertura", "sessao", "propostas", "certame", "disputa", "lances"]
+    negativos = [
+        "publicacao",
+        "publicado",
+        "assinatura",
+        "emissao",
+        "vigencia",
+        "lei",
+        "decreto",
+        "portaria",
+        "resolucao",
+        "instrucao normativa",
+        "referencia",
+        "data base",
+        "reajuste",
+        "validade",
+        "contrato",
+        "edicao",
+        "expedido",
+        "atualizacao",
+    ]
     padrao = r"\d{1,2}/\d{1,2}/\d{4}(?:\s*(?:às|as|a partir das|[-–])\s*\d{1,2}[:h]\d{2})?"
     for match in re.finditer(padrao, texto, re.IGNORECASE):
-        contexto = _normalizar(texto[max(0, match.start() - 140) : match.end() + 80])
+        valor = _limpar_linha(match.group(0))
+        contexto = _normalizar(texto[max(0, match.start() - 220) : match.end() + 140])
         peso = 0
-        if any(p in contexto for p in ["abertura", "sessao publica", "recebimento das propostas"]):
-            peso += 10
-        if any(p in contexto for p in ["publicacao", "assinatura", "vigencia"]):
-            peso -= 3
-        datas.append((peso, _limpar_linha(match.group(0))))
+        if any(p in contexto for p in positivos_fortes):
+            peso += 18
+        elif any(p in contexto for p in positivos_medios):
+            peso += 7
+        if any(p in contexto for p in negativos):
+            peso -= 12
+        if re.search(r"\d{1,2}[:h]\d{2}", valor):
+            peso += 5
+        ano_match = re.search(r"/(20\d{2})", valor)
+        if ano_referencia and ano_match and ano_match.group(1) == ano_referencia:
+            peso += 3
+        datas.append((peso, valor))
     if not datas:
         return NAO_IDENTIFICADO
     datas.sort(key=lambda item: item[0], reverse=True)
+    if datas[0][0] < 6:
+        return NAO_IDENTIFICADO
     return datas[0][1]
 
 
