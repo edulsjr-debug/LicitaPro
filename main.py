@@ -1,7 +1,6 @@
 import asyncio
 import io
 import json
-import logging
 import os
 import re
 import uuid
@@ -15,8 +14,8 @@ import pdfplumber
 import docx
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -39,37 +38,11 @@ except Exception:
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s",
-)
-
-
-class _RequestIdFilter(logging.Filter):
-    def filter(self, record):
-        if not hasattr(record, "request_id"):
-            record.request_id = "-"
-        return True
-
-
-for _handler in logging.getLogger().handlers:
-    _handler.addFilter(_RequestIdFilter())
-
-logger = logging.getLogger("licitapro")
-
-
-def _audit(event: str, request_id: str = "-", **fields):
-    payload = {"event": event, "request_id": request_id}
-    for key, value in fields.items():
-        if value is not None:
-            payload[key] = value
-    logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), extra={"request_id": request_id})
-
-app = FastAPI(title="Proxy LicitaÃ§Ã£o")
+app = FastAPI(title="Proxy Licitação")
 
 import datetime
 
-LIMITE_DIARIO = 20  # anÃ¡lises por dia
+LIMITE_DIARIO = 20  # análises por dia
 USAR_PARSER_LOCAL = os.getenv("USAR_PARSER_LOCAL", "true").lower() not in ("0", "false", "no", "off")
 PARSER_FALLBACK_API = os.getenv("PARSER_FALLBACK_API", "true").lower() not in ("0", "false", "no", "off")
 try:
@@ -105,7 +78,7 @@ APP_VERSION = os.getenv("APP_VERSION", "dev")
 APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
 APP_COMMIT = os.getenv("APP_COMMIT", "local")
 APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT", "")
-APP_VERSION_LABEL = f"{APP_VERSION} Â· {APP_CHANNEL}"
+APP_VERSION_LABEL = f"{APP_VERSION} · {APP_CHANNEL}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
 _OCR_ENGINE = None
@@ -156,100 +129,83 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):
-    request_id = uuid.uuid4().hex[:8]
-    request.state.request_id = request_id
-    try:
-        response = await call_next(request)
-    except Exception:
-        logger.exception("Unhandled request failure", extra={"request_id": request_id})
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Erro interno ao processar a requisiÃ§Ã£o.", "request_id": request_id},
-            headers={"X-Request-ID": request_id},
-        )
-    response.headers["X-Request-ID"] = request_id
-    return response
-
-SYSTEM_PROMPT = """VocÃª Ã© um especialista em licitaÃ§Ãµes pÃºblicas brasileiras.
-REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÃ‡ÃƒO" â€” ZERO introduÃ§Ãµes, ZERO raciocÃ­nio, ZERO explicaÃ§Ãµes. Apenas a ficha em Markdown.
-Se um dado realmente nÃ£o constar em nenhuma parte do texto, escreva "NÃ£o informado". Mas ANTES de escrever "NÃ£o informado" em qualquer campo, leia o documento INTEIRO â€” especialmente seÃ§Ãµes de habilitaÃ§Ã£o, anexos, clÃ¡usulas e condiÃ§Ãµes. Ã‰ PROIBIDO escrever "NÃ£o informado" para Documentos de HabilitaÃ§Ã£o se o edital contiver qualquer lista de documentos exigidos.
-Calcule o Valor Total de cada item (Qtd Ã— Valor Unit.).
+SYSTEM_PROMPT = """Você é um especialista em licitações públicas brasileiras.
+REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÇÃO" — ZERO introduções, ZERO raciocínio, ZERO explicações. Apenas a ficha em Markdown.
+Se um dado realmente não constar em nenhuma parte do texto, escreva "Não informado". Mas ANTES de escrever "Não informado" em qualquer campo, leia o documento INTEIRO — especialmente seções de habilitação, anexos, cláusulas e condições. É PROIBIDO escrever "Não informado" para Documentos de Habilitação se o edital contiver qualquer lista de documentos exigidos.
+Calcule o Valor Total de cada item (Qtd × Valor Unit.).
 Siga EXATAMENTE esta estrutura:
 
-## FICHA DE LICITAÃ‡ÃƒO
+## FICHA DE LICITAÇÃO
 
 | Campo | Valor |
 |---|---|
-| **NÂº / Processo** | ... |
-| **Ã“rgÃ£o** | ... |
+| **Nº / Processo** | ... |
+| **Órgão** | ... |
 | **Modalidade** | ... |
-| **CritÃ©rio de Julgamento** | ... |
+| **Critério de Julgamento** | ... |
 | **Valor Estimado Total** | R$ ... |
-| **VigÃªncia do Contrato** | ... |
+| **Vigência do Contrato** | ... |
 | **Abertura das Propostas** | ... |
 | **Prazo para Envio de Proposta** | ... |
 
 ## Objeto
-[descriÃ§Ã£o completa do objeto licitado]
+[descrição completa do objeto licitado]
 
-## CondiÃ§Ãµes Financeiras
+## Condições Financeiras
 - **Garantia Contratual:** ...
 - **Prazo de Pagamento:** ...
-- **PatrimÃ´nio LÃ­quido MÃ­nimo:** ...
-- **Capital Social MÃ­nimo:** ...
+- **Patrimônio Líquido Mínimo:** ...
+- **Capital Social Mínimo:** ...
 
 ## Posto de Atendimento
-[local/endereÃ§o onde os serviÃ§os serÃ£o prestados ou as entregas realizadas]
+[local/endereço onde os serviços serão prestados ou as entregas realizadas]
 
-## Contato do Ã“rgÃ£o
-[e-mail e telefone do responsÃ¡vel]
+## Contato do Órgão
+[e-mail e telefone do responsável]
 
 ## Itens a Cotar
 
-| # | DescriÃ§Ã£o | Unid. | Qtd. | Valor Unit. | Valor Total |
+| # | Descrição | Unid. | Qtd. | Valor Unit. | Valor Total |
 |---|-----------|-------|------|-------------|-------------|
 | 1 | ... | ... | ... | R$ ... | R$ ... |
 
 ## Modelo de Proposta
-[tipo de taxa, o que Ã© cotado, como lanÃ§ar, observaÃ§Ãµes importantes]
+[tipo de taxa, o que é cotado, como lançar, observações importantes]
 
-## Documentos de HabilitaÃ§Ã£o
+## Documentos de Habilitação
 
-### JurÃ­dica
+### Jurídica
 - ...
 
 ### Fiscal e Trabalhista
 - ...
 
-### EconÃ´mico-Financeira
+### Econômico-Financeira
 - ...
 
-### TÃ©cnica
+### Técnica
 - ...
 
-### Outras ExigÃªncias
+### Outras Exigências
 - ...
 
-## âš ï¸ Alertas
-> [ponto crÃ­tico relevante para a decisÃ£o de participar]
+## ⚠️ Alertas
+> [ponto crítico relevante para a decisão de participar]
 
-> [prÃ³ximo alerta, se houver]
+> [próximo alerta, se houver]
 
 ## Score de Viabilidade
 **Score:** [inteiro de 0 a 100]
-**NÃ­vel:** [Alta | MÃ©dia | Baixa]
-**Justificativa:** [2 linhas diretas avaliando acessibilidade do objeto, dificuldade das exigÃªncias e oportunidade geral]
+**Nível:** [Alta | Média | Baixa]
+**Justificativa:** [2 linhas diretas avaliando acessibilidade do objeto, dificuldade das exigências e oportunidade geral]
 
-## AnÃ¡lise de ExigÃªncias
-[Liste cada exigÃªncia de habilitaÃ§Ã£o com prefixo de status:]
-[ok] exigÃªncia â€” orientaÃ§Ã£o breve
-[warn] exigÃªncia â€” por que merece atenÃ§Ã£o
-[fail] exigÃªncia â€” por que Ã© restritiva
+## Análise de Exigências
+[Liste cada exigência de habilitação com prefixo de status:]
+[ok] exigência — orientação breve
+[warn] exigência — por que merece atenção
+[fail] exigência — por que é restritiva
 
-CritÃ©rios: [ok]=padrÃ£o fÃ¡cil (certidÃµes online, CNPJ, atestados genÃ©ricos); [warn]=requer preparaÃ§Ã£o, prazo <15 dias, PL especÃ­fico; [fail]=muito restritivo, volume >5000 unidades, PL >R$500k, sede especÃ­fica, requisito raro."""
+Critérios: [ok]=padrão fácil (certidões online, CNPJ, atestados genéricos); [warn]=requer preparação, prazo <15 dias, PL específico; [fail]=muito restritivo, volume >5000 unidades, PL >R$500k, sede específica, requisito raro."""
 
 USER_TEMPLATE = "Analise o seguinte edital ({num_docs} documento(s)) e gere a ficha:\n\n{texto}"
 
@@ -258,7 +214,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LicitaPro â€” AnÃ¡lise de Editais</title>
+<title>LicitaPro — Análise de Editais</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -434,7 +390,7 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
     </button>
     <button class="nav-item" id="nav-historico" onclick="showPage('historico')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      HistÃ³rico
+      Histórico
     </button>
     <a class="nav-item" href="/status">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
@@ -442,8 +398,8 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
     </a>
   </nav>
   <div class="sidebar-footer">
-    <div class="quota-label">AnÃ¡lises hoje</div>
-    <div class="quota-val" id="quota-val">â€” / 20</div>
+    <div class="quota-label">Análises hoje</div>
+    <div class="quota-val" id="quota-val">— / 20</div>
     <div class="quota-bar"><div class="quota-fill" id="quota-fill" style="width:0%"></div></div>
     <div class="version-line">{APP_VERSION_LABEL}</div>
     <div class="version-sub">commit {APP_COMMIT_LABEL}</div>
@@ -463,7 +419,7 @@ var _selectedFiles=[];
 var _processing=false;
 
 function scoreColor(s){return s>=75?'#166534':s>=50?'#92400E':'#991B1B'}
-function scoreLabel(s){return s>=75?'Alta':s>=50?'MÃ©dia':'Baixa'}
+function scoreLabel(s){return s>=75?'Alta':s>=50?'Média':'Baixa'}
 
 function scoreRing(score,size){
   if(!score)return '';
@@ -513,27 +469,27 @@ function renderEditaisPage(mc){
     return true;
   });
   var filterBtns=['todos','alta','media','baixa'].map(function(f){
-    var labels={todos:'Todos',alta:'Viabilidade alta',media:'MÃ©dia',baixa:'Baixa'};
+    var labels={todos:'Todos',alta:'Viabilidade alta',media:'Média',baixa:'Baixa'};
     return `<button class="filter-pill${_filter===f?' active':''}" onclick="setFilter('${f}')">${labels[f]}</button>`;
   }).join('');
   var emptyBtn=_historico.length===0?`<button class="btn btn-primary" style="margin-top:16px" onclick="showPage('upload')">Analisar primeiro edital</button>`:'';
   var cards=filtered.length===0?
-    `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'FaÃ§a upload de um PDF para comeÃ§ar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
+    `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
     filtered.map(editalCardHTML).join('');
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histÃ³rico Â· ordenados por data</p></div><button class="btn btn-primary" onclick="showPage('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">AnÃ¡lises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta Ã  meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">anÃ¡lises no histÃ³rico</div></div><div class="stat-card"><div class="lbl">Score mÃ©dio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}">${avgScore||'â€”'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage('historico')">HistÃ³rico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histórico · ordenados por data</p></div><button class="btn btn-primary" onclick="showPage('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta à meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">análises no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}">${avgScore||'—'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage('historico')">Histórico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
 }
 
 function setFilter(f){_filter=f;showPage('editais')}
 
 function editalCardHTML(r){
-  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">â€”</div>`;
+  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">—</div>`;
   return `<div class="edital-card" onclick="openEdital('${r.id}')">` + ring +
     `<div><div class="edital-meta"><span class="edital-numero">${fmtDate(r.timestamp)}</span>` +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
-    (r.score>=85?badge('PRIORITÃRIO','badge-solid'):'') +
-    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descriÃ§Ã£o')}</div>` +
-    `<div class="edital-orgao">${escHtml(r.orgao||'Ã“rgÃ£o nÃ£o identificado')}</div></div>` +
-    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'â€”')}</div>` +
+    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
+    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descrição')}</div>` +
+    `<div class="edital-orgao">${escHtml(r.orgao||'Órgão não identificado')}</div></div>` +
+    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'—')}</div>` +
     `<div style="margin-top:6px">${viabBadge(r.score)}</div></div></div>`;
 }
 
@@ -552,7 +508,7 @@ async function openEdital(id){
 }
 
 function renderUploadPage(mc){
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigÃªncias, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF Â· DOCX Â· XLSX Â· XLS Â· TXT Â· mÃºltiplos arquivos simultÃ¢neos</div></div><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, nÃ£o escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">MÃºltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para anÃ¡lise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automÃ¡tico</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0â€“100 e lista exigÃªncias.</div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></div><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Múltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
   var dz=document.getElementById('dropzone');
   dz.onclick=function(){document.getElementById('file-input').click()};
   dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
@@ -602,7 +558,7 @@ async function analisarArquivos(){
   if(_selectedFiles.length===0||_processing)return;
   _processing=true;
   var mc=document.getElementById('main-content');
-  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando editalâ€¦</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigÃªncias, calculando score de viabilidade. AtÃ© 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando edital…</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigências, calculando score de viabilidade. Até 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
   try{
     var allPdfs=_selectedFiles.every(function(f){return f.name.toLowerCase().endsWith('.pdf')});
     var resp;
@@ -634,7 +590,7 @@ async function analisarArquivos(){
     _processing=false;
     var newest=_historico[0];
     if(newest){newest.ficha=resp.ficha;showPage('detalhe',newest);}else showPage('editais');
-    toast('AnÃ¡lise concluÃ­da com sucesso!');
+    toast('Análise concluída com sucesso!');
   }catch(e){
     _processing=false;
     toast('Erro: '+e.message,5000);
@@ -645,7 +601,7 @@ async function analisarArquivos(){
 function parseExigencias(ficha){
   var exigs=[],lines=(ficha||'').split('\\n');
   for(var i=0;i<lines.length;i++){
-    var m=lines[i].match(/^\[(ok|warn|fail)\]\s*(.+?)(?:\s*[â€”â€“-]+\s*(.*))?$/i);
+    var m=lines[i].match(/^\[(ok|warn|fail)\]\s*(.+?)(?:\s*[—–-]+\s*(.*))?$/i);
     if(m)exigs.push({status:m[1].toLowerCase(),title:m[2].trim(),detail:(m[3]||'').trim()});
   }
   return exigs;
@@ -654,7 +610,7 @@ function parseExigencias(ficha){
 function fichaClean(ficha){
   return (ficha||'')
     .replace(/## Score de Viabilidade[\s\S]*?(?=\\n## |\\n*$)/i,'')
-    .replace(/## AnÃ¡lise de ExigÃªncias[\s\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## Análise de Exigências[\s\S]*?(?=\\n## |\\n*$)/i,'')
     .trim();
 }
 
@@ -667,7 +623,7 @@ var exigIcons={
 function renderDetalhePage(mc,r){
   var exigs=parseExigencias(r.ficha);
   var exigHTML=exigs.length>0?
-    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">AnÃ¡lise de exigÃªncias</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigÃªncia(s) Â· ${exigs.filter(function(e){return e.status==='ok'}).length} ok Â· ${exigs.filter(function(e){return e.status==='warn'}).length} atenÃ§Ã£o Â· ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">Análise de exigências</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigência(s) · ${exigs.filter(function(e){return e.status==='ok'}).length} ok · ${exigs.filter(function(e){return e.status==='warn'}).length} atenção · ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
     exigs.map(function(e){
       return `<div class="exig-item exig-${e.status}">${exigIcons[e.status]}<div><div class="exig-title">${escHtml(e.title)}</div>${e.detail?`<div class="exig-detail">${escHtml(e.detail)}</div>`:''}</div></div>`;
     }).join('') + `</div>` : '';
@@ -680,18 +636,18 @@ function renderDetalhePage(mc,r){
     `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">` +
     (r.timestamp?`<span style="font-family:var(--font-mono);font-size:12px;color:var(--fg-3)">${fmtDate(r.timestamp)}</span>`:'') +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
-    (r.score>=85?badge('PRIORITÃRIO','badge-solid'):'') +
-    `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'AnÃ¡lise de edital')}</h1>` +
+    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
+    `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'Análise de edital')}</h1>` +
     `<p style="font-size:15px;color:var(--fg-2)">${escHtml(r.orgao||'')}</p></div>` +
     (r.score?`<div style="flex-shrink:0;text-align:center">${scoreRing(r.score,120)}<div style="margin-top:8px;font-size:13px;font-weight:600;color:${scoreColor(r.score)}">Viabilidade ${scoreLabel(r.score)}</div></div>`:'') +
     `</div>` +
-    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'â€”')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'â€”')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'â€”'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'â€”'}</div></div></div>` +
+    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'—')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'—')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'—'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'—'}</div></div></div>` +
     exigHTML +
     `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:16px">Ficha completa</h3><div class="ficha-content">${fichaHtml}</div></div>` +
     `<div class="action-row"><button class="btn btn-secondary" id="btn-print"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Imprimir / PDF</button><button class="btn btn-secondary" id="btn-copy"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar ficha</button><button class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Gerar proposta</button></div></div>`;
   document.getElementById('btn-print').onclick=function(){window.print()};
   document.getElementById('btn-copy').onclick=function(){copiarFicha(r.id)};
-  mc.querySelector('.btn-primary:last-child').onclick=function(){toast('Em breve: geraÃ§Ã£o de proposta por IA.')};
+  mc.querySelector('.btn-primary:last-child').onclick=function(){toast('Em breve: geração de proposta por IA.')};
 }
 
 async function copiarFicha(id){
@@ -720,7 +676,7 @@ function renderHistoricoPage(mc){
     var s=items.filter(function(r){return r.score}).map(function(r){return r.score});
     var davg=s.length?Math.round(s.reduce(function(a,b){return a+b},0)/s.length):0;
     var altas=items.filter(function(r){return r.score>=75}).length;
-    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}">${davg||'â€”'}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
+    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}">${davg||'—'}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
   }).join('');
   var seg={};
   _historico.forEach(function(r){var s=r.segmento||'Outros';seg[s]=(seg[s]||0)+1});
@@ -728,7 +684,7 @@ function renderHistoricoPage(mc){
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;border:1px solid var(--border);border-radius:8px;font-size:13px"><span style="color:var(--fg-2)">${escHtml(e[0])}</span><span style="font-weight:600;color:var(--brand-600);background:var(--brand-50);padding:2px 10px;border-radius:9999px;font-size:12px">${e[1]}</span></div>`;
   }).join('');
 
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">HistÃ³rico de uso</h1><p class="page-sub">Todas as anÃ¡lises agrupadas por dia</p></div><button class="btn btn-secondary" onclick="showPage('editais')">â† Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de anÃ¡lises</div><div class="val">${_historico.length}</div><div class="sub">no histÃ³rico</div></div><div class="stat-card"><div class="lbl">Score mÃ©dio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}">${avg||'â€”'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com anÃ¡lises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma anÃ¡lise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>AnÃ¡lises</th><th>Score mÃ©dio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Histórico de uso</h1><p class="page-sub">Todas as análises agrupadas por dia</p></div><button class="btn btn-secondary" onclick="showPage('editais')">← Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de análises</div><div class="val">${_historico.length}</div><div class="sub">no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}">${avg||'—'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma análise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>Análises</th><th>Score médio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
 }
 
 async function loadHistorico(){
@@ -739,7 +695,7 @@ async function loadHistorico(){
     var qv=document.getElementById('quota-val'),qf=document.getElementById('quota-fill');
     if(qv)qv.textContent=hoje+' / 20';
     if(qf)qf.style.width=Math.min(100,(hoje/20)*100)+'%';
-  }catch(e){console.error('Erro ao carregar histÃ³rico:',e)}
+  }catch(e){console.error('Erro ao carregar histórico:',e)}
 }
 
 async function initApp(){await loadHistorico();showPage('editais')}
@@ -766,7 +722,7 @@ def _obter_ocr_engine():
         try:
             _OCR_ENGINE = RapidOCR()
         except Exception as e:
-            logger.exception("Erro ao inicializar motor OCR", extra={"request_id": "-"})
+            print(f"[OCR] Erro ao inicializar motor OCR: {e}")
             _OCR_ENGINE = False
             return None
     return None if _OCR_ENGINE is False else _OCR_ENGINE
@@ -835,12 +791,7 @@ def _ocr_pagina_pdf(doc, pagina_idx: int) -> str:
         resultado = engine(imagem)
         return _ocr_resultado_para_texto(resultado)
     except Exception as e:
-        logger.warning(
-            "Erro na pagina OCR %s: %s",
-            pagina_idx + 1,
-            e,
-            extra={"request_id": "-"},
-        )
+        print(f"[OCR] Erro na pagina {pagina_idx + 1}: {e}")
         return ""
 
 
@@ -849,12 +800,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
     ocr_usado = False
     arquivo_grande = len(conteudo) > OCR_MAX_FILE_BYTES
     if arquivo_grande:
-        logger.info(
-            "Arquivo %s KB > limite %s KB - OCR desativado.",
-            len(conteudo) // 1024,
-            OCR_MAX_FILE_BYTES // 1024,
-            extra={"request_id": "-"},
-        )
+        print(f"[OCR] Arquivo {len(conteudo)//1024} KB > limite {OCR_MAX_FILE_BYTES//1024} KB — OCR desativado.")
     try:
         if fitz is not None and OCR_HABILITADO and not arquivo_grande:
             pdf_ocr = fitz.open(stream=conteudo, filetype="pdf")
@@ -881,7 +827,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
 
         resultado = "\n".join(partes).strip()
         if not resultado:
-            # Ãºltimo recurso: OCR em sequÃªncia quando a extraÃ§Ã£o nativa vier vazia.
+            # último recurso: OCR em sequência quando a extração nativa vier vazia.
             if pdf_ocr is not None:
                 partes_ocr = []
                 for indice in range(min(len(pdf_ocr), OCR_MAX_PAGINAS)):
@@ -893,7 +839,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                     ocr_usado = True
 
         if not resultado:
-            # Ãºltimo recurso: pdfminer.six diretamente
+            # último recurso: pdfminer.six diretamente
             try:
                 from pdfminer.high_level import extract_text as _pm_et
                 resultado = (_pm_et(io.BytesIO(conteudo)) or "").strip()
@@ -901,7 +847,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pass
 
         if ocr_usado:
-            logger.info("OCR aplicado durante o upload do PDF.", extra={"request_id": "-"})
+            print("[OCR] OCR aplicado durante o upload do PDF.")
         return resultado
     finally:
         if pdf_ocr is not None:
@@ -932,7 +878,7 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
     return conteudo.decode("utf-8", errors="replace")
 
 
-# â”€â”€ HistÃ³rico de anÃ¡lises â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Histórico de análises ────────────────────────────────────────────────────
 HISTORICO_FILE = Path("historico.json")
 _DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -954,7 +900,7 @@ def _init_db():
                 """)
             conn.commit()
     except Exception as e:
-        logger.exception("Erro ao inicializar tabela do hist?rico", extra={"request_id": "-"})
+        print(f"[DB] Erro ao inicializar tabela: {e}")
 
 def _carregar_historico() -> list:
     if _DATABASE_URL:
@@ -966,7 +912,7 @@ def _carregar_historico() -> list:
                     if rows:
                         return [r[0] for r in rows]
         except Exception as e:
-            logger.exception("Erro ao carregar hist?rico do banco", extra={"request_id": "-"})
+            print(f"[DB] Erro ao carregar histórico: {e}")
     try:
         if HISTORICO_FILE.exists():
             return json.loads(HISTORICO_FILE.read_text(encoding="utf-8"))
@@ -988,9 +934,9 @@ def _migrar_se_necessario():
                 count = cur.fetchone()[0]
         if count == 0:
             _salvar_historico()
-            logger.info("Migra??o do hist?rico: %s an?lise(s) importadas do arquivo.", len(_historico), extra={"request_id": "-"})
+            print(f"[DB] Migração: {len(_historico)} análise(s) importadas do arquivo.")
     except Exception as e:
-        logger.exception("Erro na migra??o do hist?rico", extra={"request_id": "-"})
+        print(f"[DB] Erro na migração: {e}")
 
 _migrar_se_necessario()
 
@@ -1008,7 +954,8 @@ def _salvar_historico():
                 conn.commit()
             return
         except Exception as e:
-            logger.exception("Erro ao salvar hist?rico", extra={"request_id": "-"})`r`n    try:
+            print(f"[DB] Erro ao salvar histórico: {e}")
+    try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -1016,17 +963,17 @@ def _salvar_historico():
         pass
 
 _SEGMENTOS = [
-    ("SaÃºde",                  ["saÃºde", "saude", "mÃ©dic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirÃºrgic", "farmÃ¡c", "farmac", "ambulatorial"]),
-    ("EducaÃ§Ã£o",               ["escola", "educaÃ§Ã£o", "educacao", "pedagÃ³g", "pedagogic", "didÃ¡tic", "ensino", "aluno", "professor", "material escolar", "creche"]),
-    ("Obras e Infraestrutura", ["obras", "construÃ§Ã£o", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elÃ©tric", "eletric", "hidrÃ¡ulic", "hidraulic", "saneamento"]),
-    ("AlimentaÃ§Ã£o",            ["aliment", "merenda", "refeiÃ§Ã£o", "refeicao", "gÃªneros alimentÃ­c", "generos aliment", "nutri", "cozinha", "marmita"]),
-    ("Tecnologia e TI",        ["software", "hardware", "computador", "informÃ¡tica", "informatica", "sistema", "licenÃ§a", "servidor", " ti ", "tecnologia da informaÃ§Ã£o", "impressora"]),
-    ("Transporte",             ["veÃ­culo", "veiculo", "frota", "combustÃ­vel", "combustivel", "Ã´nibus", "onibus", "manutenÃ§Ã£o veicular", "locaÃ§Ã£o de veÃ­culo", "locacao de veiculo"]),
-    ("Viagens e Passagens",    ["passagem aÃ©rea", "passagem aerea", "passagem Ã¡rea", "bilhete aÃ©reo", "bilhete aereo", "aÃ©reo", "aereo", "aÃ©rea", "aerea", "aviaÃ§Ã£o", "aviacao", "companhia aÃ©rea", "companhia aerea", "passagem", "hospedagem", "diÃ¡ria", "diaria", "hotel", "viagem"]),
-    ("Eventos e CapacitaÃ§Ã£o",  ["evento", "congresso", "capacitaÃ§Ã£o", "capacitacao", "treinamento", "curso", "palestra", "cerimÃ´nia", "cerimonia"]),
-    ("Limpeza e ConservaÃ§Ã£o",  ["limpeza", "higien", "conservaÃ§Ã£o predial", "conservacao predial", "jardinagem", "desinfeÃ§Ã£o", "desinfecao", "asseio", "zeladoria"]),
-    ("MobiliÃ¡rio e EscritÃ³rio",["mobiliÃ¡rio", "mobiliario", "mobÃ­lia", "mobilia", "escritÃ³rio", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritÃ³rio", "material de escritorio"]),
-    ("SeguranÃ§a",              ["seguranÃ§a", "seguranca", "vigilÃ¢ncia", "vigilancia", "monitoramento", "cÃ¢mera", "camera", "cctv", "alarme", "portaria"]),
+    ("Saúde",                  ["saúde", "saude", "médic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirúrgic", "farmác", "farmac", "ambulatorial"]),
+    ("Educação",               ["escola", "educação", "educacao", "pedagóg", "pedagogic", "didátic", "ensino", "aluno", "professor", "material escolar", "creche"]),
+    ("Obras e Infraestrutura", ["obras", "construção", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elétric", "eletric", "hidráulic", "hidraulic", "saneamento"]),
+    ("Alimentação",            ["aliment", "merenda", "refeição", "refeicao", "gêneros alimentíc", "generos aliment", "nutri", "cozinha", "marmita"]),
+    ("Tecnologia e TI",        ["software", "hardware", "computador", "informática", "informatica", "sistema", "licença", "servidor", " ti ", "tecnologia da informação", "impressora"]),
+    ("Transporte",             ["veículo", "veiculo", "frota", "combustível", "combustivel", "ônibus", "onibus", "manutenção veicular", "locação de veículo", "locacao de veiculo"]),
+    ("Viagens e Passagens",    ["passagem aérea", "passagem aerea", "passagem área", "bilhete aéreo", "bilhete aereo", "aéreo", "aereo", "aérea", "aerea", "aviação", "aviacao", "companhia aérea", "companhia aerea", "passagem", "hospedagem", "diária", "diaria", "hotel", "viagem"]),
+    ("Eventos e Capacitação",  ["evento", "congresso", "capacitação", "capacitacao", "treinamento", "curso", "palestra", "cerimônia", "cerimonia"]),
+    ("Limpeza e Conservação",  ["limpeza", "higien", "conservação predial", "conservacao predial", "jardinagem", "desinfeção", "desinfecao", "asseio", "zeladoria"]),
+    ("Mobiliário e Escritório",["mobiliário", "mobiliario", "mobília", "mobilia", "escritório", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritório", "material de escritorio"]),
+    ("Segurança",              ["segurança", "seguranca", "vigilância", "vigilancia", "monitoramento", "câmera", "camera", "cctv", "alarme", "portaria"]),
 ]
 
 def detectar_segmento(texto: str) -> str:
@@ -1037,35 +984,26 @@ def detectar_segmento(texto: str) -> str:
     return "Outros"
 
 def extrair_campo(ficha: str, campo: str) -> str:
-    # padrÃ£o markdown: | **Campo** | valor |
+    # padrão markdown: | **Campo** | valor |
     m = re.search(rf'\|\s*\*\*{re.escape(campo)}\*\*\s*\|\s*([^|\n]+)', ficha)
     if m:
         return m.group(1).strip()
-    # padrÃ£o texto puro: "Campo: valor" ou "Campo    valor"
+    # padrão texto puro: "Campo: valor" ou "Campo    valor"
     m = re.search(rf'(?:^|\n)\s*{re.escape(campo)}\s*[:\t|]+\s*([^\n]+)', ficha, re.IGNORECASE)
     if m:
         return m.group(1).strip()[:150]
-    return "NÃ£o informado"
+    return "Não informado"
 
 def extrair_objeto(ficha: str) -> str:
-    # seÃ§Ã£o markdown
+    # seção markdown
     m = re.search(r'## Objeto\s*\n+(.+?)(?:\n##|\Z)', ficha, re.DOTALL)
     if m:
         return m.group(1).strip()[:200]
-    # seÃ§Ã£o texto puro
+    # seção texto puro
     m = re.search(r'Objeto\s*\n+(.+?)(?:\n\n|\Z)', ficha, re.DOTALL)
     if m:
         return m.group(1).strip()[:200]
-    return "NÃ£o informado"
-
-def extrair_score(ficha: str) -> int:
-    m = re.search(r'\*\*Score:\*\*\s*(\d+)', ficha)
-    if m:
-        try:
-            return max(0, min(100, int(m.group(1))))
-        except Exception:
-            pass
-    return 0
+    return "Não informado"
 
 def extrair_score(ficha: str) -> int:
     m = re.search(r'\*\*Score:\*\*\s*(\d+)', ficha)
@@ -1077,18 +1015,18 @@ def extrair_score(ficha: str) -> int:
     return 0
 
 def _eh_ficha(texto: str) -> bool:
-    # normaliza espaÃ§os e coloca em maiÃºsculas
+    # normaliza espaços e coloca em maiúsculas
     t = " ".join(texto.upper().split())
     # match direto (com ou sem acento)
-    if "FICHA DE LICITAÃ‡" in t or "FICHA DE LICITAC" in t:
+    if "FICHA DE LICITAÇ" in t or "FICHA DE LICITAC" in t:
         return True
     # "FICHA" + "LICITA" em qualquer lugar (cobre encoding quebrado)
     if "FICHA" in t and "LICITA" in t:
         return True
-    # fallback: presenÃ§a de vÃ¡rios campos tÃ­picos de ficha
+    # fallback: presença de vários campos típicos de ficha
     campos_tipicos = [
         "VALOR ESTIMADO", "DOCUMENTOS DE HABILITA", "ITENS A COTAR",
-        "MODALIDADE", "VIGÃŠNCIA", "VIGENCIA", "CRITÃ‰RIO", "CRITERIO",
+        "MODALIDADE", "VIGÊNCIA", "VIGENCIA", "CRITÉRIO", "CRITERIO",
         "PRAZO DE PAGAMENTO", "CONTATO DO", "ABERTURA",
     ]
     return sum(1 for c in campos_tipicos if c in t) >= 3
@@ -1097,7 +1035,7 @@ def registrar_analise(ficha: str):
     registro = {
         "id":        uuid.uuid4().hex[:10],
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     extrair_campo(ficha, "Ã“rgÃ£o"),
+        "orgao":     extrair_campo(ficha, "Órgão"),
         "valor":     extrair_campo(ficha, "Valor Estimado Total"),
         "objeto":    extrair_objeto(ficha),
         "segmento":  detectar_segmento(ficha),
@@ -1124,9 +1062,9 @@ _reclassificar_historico()
 
 MAX_CHARS = 400_000
 
-# Textos pequenos: Groq e OpenRouter primeiro (gratuitos), OpenAI sÃ³ se necessÃ¡rio
+# Textos pequenos: Groq e OpenRouter primeiro (gratuitos), OpenAI só se necessário
 # Textos grandes: OpenAI primeiro (melhor qualidade para docs longos)
-LIMITE_PEQUENO = 15_000  # chars â€” abaixo disso evita cobrar do OpenAI
+LIMITE_PEQUENO = 15_000  # chars — abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
     ("gemini", "gemini-2.5-flash-lite",   400_000),
@@ -1258,12 +1196,12 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
                 p["tokens"]   += tok_in + tok_out
                 p["custo_usd"] = round(p["custo_usd"] + custo, 6)
                 return ficha
-            ultimo_erro = f"Modelo {modelo} nÃ£o seguiu o formato esperado"
+            ultimo_erro = f"Modelo {modelo} não seguiu o formato esperado"
             continue
         except openai.APITimeoutError:
             raise HTTPException(504, "Tempo limite excedido ao chamar a API.")
         except openai.APIConnectionError:
-            raise HTTPException(500, "Erro de conexÃ£o com a API.")
+            raise HTTPException(500, "Erro de conexão com a API.")
         except openai.APIStatusError as e:
             if e.status_code in (400, 401, 402, 404, 413, 429, 503):
                 msg = str(e.message)
@@ -1279,13 +1217,13 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
                         tempo = f"{segundos} segundos"
                     ultimo_erro = tempo
                 elif 'per-day' in msg or 'per_day' in msg or 'daily' in msg.lower():
-                    ultimo_erro = "algumas horas (limite diÃ¡rio atingido)"
+                    ultimo_erro = "algumas horas (limite diário atingido)"
                 else:
                     ultimo_erro = "alguns minutos"
                 continue
             raise HTTPException(500, f"Erro ao chamar a API: {e.message}")
 
-    raise HTTPException(503, f"Todas as IAs estÃ£o sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
+    raise HTTPException(503, f"Todas as IAs estão sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
 
 
 def _registrar_uso_parser_local(confianca: int):
@@ -1301,7 +1239,7 @@ def _registrar_uso_parser_local(confianca: int):
 
 
 async def _enriquecer_cnpj(cnpj: str) -> dict | None:
-    """Consulta BrasilAPI para obter razÃ£o social oficial do CNPJ. Gratuito, sem auth."""
+    """Consulta BrasilAPI para obter razão social oficial do CNPJ. Gratuito, sem auth."""
     cnpj_limpo = re.sub(r"\D", "", cnpj)
     if len(cnpj_limpo) != 14:
         return None
@@ -1314,69 +1252,8 @@ async def _enriquecer_cnpj(cnpj: str) -> dict | None:
                 return json.loads(resp.read().decode())
         return await loop.run_in_executor(None, _fetch)
     except Exception as e:
-        logger.warning("Falha ao consultar CNPJ %s: %s", cnpj_limpo, e, extra={"request_id": "-"})
+        print(f"[CNPJ] Falha ao consultar {cnpj_limpo}: {e}")
         return None
-
-
-async def analisar_com_fallback(texto: str, num_docs: int) -> str:
-    if not USAR_PARSER_LOCAL:
-        return await chamar_groq(texto, num_docs)
-
-    try:
-        resultado = analisar_sem_api(texto, min_confianca=PARSER_MIN_CONFIANCA)
-    except Exception as e:
-        logger.exception("Erro no parser local", extra={"request_id": "-"})
-        if PARSER_FALLBACK_API:
-            return await chamar_groq(texto, num_docs)
-        raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
-
-    texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
-    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API and not texto_longo:
-        logger.info(
-            "ConfianÃ§a baixa (%s%%). Usando fallback por API.",
-            resultado.get("confianca", 0),
-            extra={"request_id": "-"},
-        )
-        return await chamar_groq(texto, num_docs)
-
-    if resultado.get("usar_fallback_api") and texto_longo:
-        logger.info(
-            "Documento longo demais para fallback automÃ¡tico; mantendo saÃ­da do parser local para evitar timeout.",
-            extra={"request_id": "-"},
-        )
-    # enriquecimento: BrasilAPI CNPJ â†’ razÃ£o social oficial
-    cnpj_extraido = resultado.get("cnpj", "")
-    if _is_identificado(cnpj_extraido):
-        dados_cnpj = await _enriquecer_cnpj(cnpj_extraido)
-        if dados_cnpj:
-            razao = (dados_cnpj.get("razao_social") or "").strip()
-            orgao_atual = resultado.get("orgao", "")
-            # usa razÃ£o social oficial quando: (a) orgÃ£o nÃ£o identificado,
-            # (b) orgÃ£o tem mais de 10 palavras (capturou contexto demais),
-            # (c) orgÃ£o contÃ©m artefatos de tabela PDF ("PROJETO:", "INFORMAÃ‡Ã•ES")
-            orgao_ruim = (
-                not _is_identificado(orgao_atual)
-                or len(orgao_atual.split()) > 10
-                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÃ‡Ã•ES", "ORIENTADA"))
-            )
-            if razao and orgao_ruim:
-                resultado["orgao"] = razao.title()
-                resultado["ficha"] = gerar_ficha(resultado)
-                logger.info("Ã“rgÃ£o enriquecido via CNPJ: %s", razao[:80], extra={"request_id": "-"})
-    _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
-    return resultado["ficha"]
-
-
-def _registrar_uso_parser_local(confianca: int):
-    _stats["total_analises"] += 1
-    p = _stats["por_provedor"].setdefault(
-        "parser-local",
-        {"analises": 0, "tokens": 0, "custo_usd": 0.0},
-    )
-    p["analises"] += 1
-    p["tokens"] = 0
-    p["custo_usd"] = 0.0
-    p["confianca"] = confianca
 
 
 async def analisar_com_fallback(texto: str, num_docs: int) -> str:
@@ -1405,6 +1282,26 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
             "mantendo saída do parser local para evitar timeout."
         )
 
+    # enriquecimento: BrasilAPI CNPJ → razão social oficial
+    cnpj_extraido = resultado.get("cnpj", "")
+    if _is_identificado(cnpj_extraido):
+        dados_cnpj = await _enriquecer_cnpj(cnpj_extraido)
+        if dados_cnpj:
+            razao = (dados_cnpj.get("razao_social") or "").strip()
+            orgao_atual = resultado.get("orgao", "")
+            # usa razão social oficial quando: (a) orgão não identificado,
+            # (b) orgão tem mais de 10 palavras (capturou contexto demais),
+            # (c) orgão contém artefatos de tabela PDF ("PROJETO:", "INFORMAÇÕES")
+            orgao_ruim = (
+                not _is_identificado(orgao_atual)
+                or len(orgao_atual.split()) > 10
+                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÇÕES", "ORIENTADA"))
+            )
+            if razao and orgao_ruim:
+                resultado["orgao"] = razao.title()
+                resultado["ficha"] = gerar_ficha(resultado)
+                print(f"[CNPJ] Órgão enriquecido: {razao[:80]}")
+
     _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
     return resultado["ficha"]
 
@@ -1414,14 +1311,14 @@ async def status():
     total   = _stats["total_analises"]
     hoje    = _stats["analises_hoje"]
     hist_n  = len(_historico)
-    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "nÃ£o informado"
+    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "não informado"
     data_reset = _stats["hoje"]
 
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Status â€” LicitaPro</title>
+<title>Status — LicitaPro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -1485,33 +1382,33 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 <main>
   <div class="page-header">
     <h1 class="page-title">Status do sistema</h1>
-    <p class="page-sub">SessÃ£o atual &nbsp;Â·&nbsp; Reseta em: {data_reset}</p>
+    <p class="page-sub">Sessão atual &nbsp;·&nbsp; Reseta em: {data_reset}</p>
   </div>
 
   <div class="grid g4">
     <div class="card">
-      <div class="stat-label">AnÃ¡lises hoje</div>
+      <div class="stat-label">Análises hoje</div>
       <div class="stat-val">{hoje}</div>
-      <div class="stat-sub">anÃ¡lises processadas hoje</div>
+      <div class="stat-sub">análises processadas hoje</div>
     </div>
     <div class="card">
-      <div class="stat-label">Total na sessÃ£o</div>
+      <div class="stat-label">Total na sessão</div>
       <div class="stat-val">{total}</div>
-      <div class="stat-sub">anÃ¡lises realizadas</div>
+      <div class="stat-sub">análises realizadas</div>
     </div>
     <div class="card">
-      <div class="stat-label">HistÃ³rico salvo</div>
+      <div class="stat-label">Histórico salvo</div>
       <div class="stat-val">{hist_n}</div>
-      <div class="stat-sub">anÃ¡lises no arquivo</div>
+      <div class="stat-sub">análises no arquivo</div>
     </div>
     <div class="card">
-      <div class="stat-label">VersÃ£o vigente</div>
+      <div class="stat-label">Versão vigente</div>
       <div class="stat-val-sm">{APP_VERSION_LABEL}</div>
-      <div class="stat-sub">commit {APP_COMMIT_LABEL} Â· deploy {deploy_label}</div>
+      <div class="stat-sub">commit {APP_COMMIT_LABEL} · deploy {deploy_label}</div>
     </div>
   </div>
 
-  <p class="footer-note">Atualiza automaticamente a cada 30 s &nbsp;Â·&nbsp; {_stats["hoje"]} &nbsp;Â·&nbsp; {APP_VERSION_LABEL} &nbsp;Â·&nbsp; commit {APP_COMMIT_LABEL}</p>
+  <p class="footer-note">Atualiza automaticamente a cada 30 s &nbsp;·&nbsp; {_stats["hoje"]} &nbsp;·&nbsp; {APP_VERSION_LABEL} &nbsp;·&nbsp; commit {APP_COMMIT_LABEL}</p>
 </main>
 <script>setTimeout(()=>location.reload(),30000);</script>
 </body>
@@ -1519,42 +1416,38 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 
 
 @app.post("/importar/arquivo")
-async def importar_arquivo(request: Request, arquivos: list[UploadFile] = File(...)):
+async def importar_arquivo(arquivos: list[UploadFile] = File(...)):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
-    _audit("importar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
     importados, ignorados = [], []
     for arq in arquivos:
         conteudo = await arq.read()
         try:
             texto = extrair_texto(arq.filename, conteudo)
         except Exception as e:
-            _audit("importar_arquivo_read_error", request.state.request_id, arquivo=arq.filename, erro=str(e))
-            ignorados.append({"arquivo": arq.filename, "motivo": "erro ao ler: " + str(e)})
+            ignorados.append({"arquivo": arq.filename, "motivo": f"erro ao ler: {e}"})
             continue
         texto = (texto or "").strip()
         if not texto:
             ignorados.append({"arquivo": arq.filename, "motivo": "nenhum texto extraído do arquivo"})
             continue
+        # já em markdown → usa direto; texto puro → envolve com cabeçalho
         if "## FICHA" in texto:
             ficha = texto[texto.find("## FICHA"):]
         else:
             ficha = "## FICHA DE LICITAÇÃO\n\n" + texto
         registrar_analise(ficha)
         importados.append(arq.filename)
-    _audit("importar_arquivo_done", request.state.request_id, importados=len(importados), ignorados=len(ignorados))
     return {"importados": importados, "ignorados": ignorados}
 
 
 @app.post("/importar/texto")
-async def importar_texto(http_request: Request, request: AnalisarRequest):
+async def importar_texto(request: AnalisarRequest):
     texto = request.texto.strip()
     if not texto:
         raise HTTPException(400, "Texto vazio.")
-    _audit("importar_texto_start", http_request.state.request_id, chars=len(texto), num_docs=request.num_docs)
     ficha = texto[texto.find("## FICHA"):] if "## FICHA" in texto else "## FICHA DE LICITAÇÃO\n\n" + texto
     registrar_analise(ficha)
-    _audit("importar_texto_done", http_request.state.request_id, chars=len(texto), num_docs=request.num_docs)
     return {"ok": True}
 
 
@@ -1588,11 +1481,11 @@ async def root():
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
-async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...)):
+async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
-    _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
 
+    # reset diário
     hoje = datetime.date.today().isoformat()
     if _stats["hoje"] != hoje:
         _stats["hoje"] = hoje
@@ -1607,8 +1500,7 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
         try:
             texto = extrair_texto(arq.filename, conteudo)
         except Exception as e:
-            _audit("analisar_arquivo_read_error", request.state.request_id, arquivo=arq.filename, erro=str(e))
-            raise HTTPException(400, "Erro ao ler " + arq.filename + ": " + str(e))
+            raise HTTPException(400, f"Erro ao ler '{arq.filename}': {e}")
         textos.append((arq.filename, texto))
 
     cota = MAX_CHARS // len(textos)
@@ -1617,6 +1509,8 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
         if len(txt) <= cota:
             trecho = txt
         else:
+            # pega 60% do início (cabeçalho, objeto, datas, valor)
+            # e 40% do fim (itens, documentos, alertas)
             inicio = int(cota * 0.60)
             fim    = cota - inicio
             trecho = txt[:inicio] + "\n\n[...]\n\n" + txt[-fim:]
@@ -1625,16 +1519,13 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     ficha = await analisar_com_fallback(texto_completo, len(arquivos))
     _stats["analises_hoje"] += 1
     registrar_analise(ficha)
-    _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
     return AnalisarResponse(ficha=ficha)
 
 
 @app.post("/analisar", response_model=AnalisarResponse)
-async def analisar(http_request: Request, request: AnalisarRequest):
-    _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
+async def analisar(request: AnalisarRequest):
     ficha = await analisar_com_fallback(request.texto, request.num_docs)
     registrar_analise(ficha)
-    _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     return AnalisarResponse(ficha=ficha)
 
 
