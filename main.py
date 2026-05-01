@@ -14,7 +14,7 @@ import pdfplumber
 import docx
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -301,6 +301,9 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .btn-secondary:hover{background:var(--ink-50);color:var(--fg-1)}
 .btn-sm{padding:7px 13px;font-size:13px}
 .btn:active{transform:scale(.98)}
+.modo-btn{padding:7px 16px;border-radius:var(--radius-md);font-size:13px;font-weight:600;font-family:var(--font-sans);cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--fg-2);transition:all 120ms var(--ease-out)}
+.modo-btn:hover{background:var(--ink-50);color:var(--fg-1)}
+.modo-btn.active{background:var(--brand-500);color:#fff;border-color:var(--brand-500)}
 .dropzone{border:2px dashed var(--brand-300);border-radius:var(--radius-xl);padding:64px 32px;background:var(--brand-50);text-align:center;cursor:pointer;transition:all 200ms var(--ease-out)}
 .dropzone.over,.dropzone:hover{background:var(--brand-100);border-color:var(--brand-500)}
 .dz-icon{width:56px;height:56px;border-radius:9999px;background:#fff;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;color:var(--brand-500);margin:0 auto 20px}
@@ -417,6 +420,7 @@ var _historico=[];
 var _filter='todos';
 var _selectedFiles=[];
 var _processing=false;
+var _modoAnalise='auto';
 
 function scoreColor(s){return s>=75?'#166534':s>=50?'#92400E':'#991B1B'}
 function scoreLabel(s){return s>=75?'Alta':s>=50?'Média':'Baixa'}
@@ -508,7 +512,7 @@ async function openEdital(id){
 }
 
 function renderUploadPage(mc){
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></div><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Múltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></div><div class="file-list" id="file-list"></div><div id="modo-wrap" style="margin-top:16px;display:none"><div style="font-size:12px;font-weight:600;color:var(--fg-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Modo de análise</div><div style="display:flex;gap:6px" id="modo-btns"><button class="modo-btn active" data-modo="auto" title="Parser local com fallback automático para IA quando necessário">Auto</button><button class="modo-btn" data-modo="parser" title="Apenas parser local, sem IA (mais rápido, sem custo de API)">Código</button><button class="modo-btn" data-modo="ia" title="Envia direto para IA (Gemini / Groq), ignora o parser">IA</button></div></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:16px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Múltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
   var dz=document.getElementById('dropzone');
   dz.onclick=function(){document.getElementById('file-input').click()};
   dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
@@ -516,6 +520,13 @@ function renderUploadPage(mc){
   dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files)};
   var btn=document.getElementById('btn-analisar');
   btn.onclick=analisarArquivos;
+  document.getElementById('modo-btns').addEventListener('click',function(e){
+    var b=e.target.closest('.modo-btn');
+    if(!b)return;
+    document.querySelectorAll('.modo-btn').forEach(function(x){x.classList.remove('active')});
+    b.classList.add('active');
+    _modoAnalise=b.dataset.modo;
+  });
   renderFileList();
   document.getElementById('file-input').onchange=function(){addFiles(this.files);this.value=''};
 }
@@ -528,12 +539,14 @@ function handleDrop(e){
 function addFiles(files){for(var i=0;i<files.length;i++)_selectedFiles.push(files[i]);renderFileList()}
 function removeFile(i){_selectedFiles.splice(i,1);renderFileList()}
 function renderFileList(){
-  var fl=document.getElementById('file-list'),btn=document.getElementById('btn-analisar');
+  var fl=document.getElementById('file-list'),btn=document.getElementById('btn-analisar'),mw=document.getElementById('modo-wrap');
   if(!fl)return;
   fl.innerHTML=_selectedFiles.map(function(f,i){
     return `<div class="file-item"><span class="file-name">${escHtml(f.name)}</span><span class="file-size">${Math.round(f.size/1024)} KB</span><button class="file-rm" data-rm="${i}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>`;
   }).join('');
-  if(btn)btn.style.display=_selectedFiles.length>0?'flex':'none';
+  var show=_selectedFiles.length>0;
+  if(btn)btn.style.display=show?'flex':'none';
+  if(mw)mw.style.display=show?'block':'none';
   fl.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){removeFile(+b.dataset.rm)}});
 }
 
@@ -573,7 +586,7 @@ async function analisarArquivos(){
       if(allPdfs){
         var sep=String.fromCharCode(10)+String.fromCharCode(10);
         var textoCompleto=partes.join(sep);
-        var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length})});
+        var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length,modo:_modoAnalise})});
         if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
         resp=await res.json();
       }
@@ -581,6 +594,7 @@ async function analisarArquivos(){
     if(!resp){
       var fd=new FormData();
       for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
+      fd.append('modo',_modoAnalise);
       var res=await fetch('/analisar/arquivo',{method:'POST',body:fd});
       if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
       resp=await res.json();
@@ -708,6 +722,7 @@ initApp();
 class AnalisarRequest(BaseModel):
     texto: str
     num_docs: int = 2
+    modo: str = "auto"  # "auto" | "parser" | "ia"
 
 
 class AnalisarResponse(BaseModel):
@@ -1269,34 +1284,38 @@ async def _enriquecer_cnpj(cnpj: str) -> dict | None:
         return None
 
 
-async def analisar_com_fallback(texto: str, num_docs: int) -> str:
-    if not USAR_PARSER_LOCAL:
+async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -> str:
+    # modo "ia": pula o parser e vai direto para IA
+    if modo == "ia" or not USAR_PARSER_LOCAL:
+        print(f"[MODO] Análise por IA (modo={modo})")
         return await chamar_groq(texto, num_docs)
 
     try:
         resultado = analisar_sem_api(texto, min_confianca=PARSER_MIN_CONFIANCA)
     except Exception as e:
         print(f"[PARSER] Erro no parser local: {e}")
-        if PARSER_FALLBACK_API:
+        if modo != "parser" and PARSER_FALLBACK_API:
             return await chamar_groq(texto, num_docs)
         raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
 
-    texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
-    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
-        # Para documentos longos, trunca antes de enviar para IA (60% início + 40% fim)
-        if texto_longo:
-            corte = int(PARSER_MAX_CHARS_FALLBACK * 0.60)
-            texto_api = texto[:corte] + "\n\n[...trecho omitido...]\n\n" + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
-            print(
-                f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%), doc longo "
-                f"({len(texto)} chars) — truncado para fallback API."
-            )
-        else:
-            texto_api = texto
-            print(
-                f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%). Usando fallback por API."
-            )
-        return await chamar_groq(texto_api, num_docs)
+    # modo "parser": retorna o resultado do parser sem nunca chamar IA
+    if modo == "parser":
+        print(f"[MODO] Análise por parser (confiança={resultado.get('confianca', 0)}%)")
+    else:
+        # modo "auto": fallback para IA se confiança baixa
+        texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
+        if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+            if texto_longo:
+                corte = int(PARSER_MAX_CHARS_FALLBACK * 0.60)
+                texto_api = texto[:corte] + "\n\n[...trecho omitido...]\n\n" + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
+                print(
+                    f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%), doc longo "
+                    f"({len(texto)} chars) — truncado para fallback API."
+                )
+            else:
+                texto_api = texto
+                print(f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%). Usando fallback API.")
+            return await chamar_groq(texto_api, num_docs)
 
     # enriquecimento: BrasilAPI CNPJ → razão social oficial
     cnpj_extraido = resultado.get("cnpj", "")
@@ -1497,7 +1516,7 @@ async def root():
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
-async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
+async def analisar_arquivo(arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
 
@@ -1532,7 +1551,7 @@ async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
             trecho = txt[:inicio] + "\n\n[...]\n\n" + txt[-fim:]
         partes.append(f"=== {nome} ===\n{trecho}")
     texto_completo = "\n\n".join(partes)
-    ficha = await analisar_com_fallback(texto_completo, len(arquivos))
+    ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
     _stats["analises_hoje"] += 1
     registrar_analise(ficha)
     return AnalisarResponse(ficha=ficha)
@@ -1540,7 +1559,7 @@ async def analisar_arquivo(arquivos: list[UploadFile] = File(...)):
 
 @app.post("/analisar", response_model=AnalisarResponse)
 async def analisar(request: AnalisarRequest):
-    ficha = await analisar_com_fallback(request.texto, request.num_docs)
+    ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
     registrar_analise(ficha)
     return AnalisarResponse(ficha=ficha)
 
