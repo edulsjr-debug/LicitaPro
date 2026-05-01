@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import logging
 import os
 import re
 import uuid
@@ -14,8 +15,8 @@ import pdfplumber
 import docx
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -37,6 +38,24 @@ except Exception:
     RapidOCR = None
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s",
+)
+
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        if not hasattr(record, "request_id"):
+            record.request_id = "-"
+        return True
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_RequestIdFilter())
+
+logger = logging.getLogger("licitapro")
 
 app = FastAPI(title="Proxy Licitação")
 
@@ -128,6 +147,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = uuid.uuid4().hex[:8]
+    request.state.request_id = request_id
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled request failure", extra={"request_id": request_id})
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Erro interno ao processar a requisição.", "request_id": request_id},
+            headers={"X-Request-ID": request_id},
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 SYSTEM_PROMPT = """Você é um especialista em licitações públicas brasileiras.
 REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÇÃO" — ZERO introduções, ZERO raciocínio, ZERO explicações. Apenas a ficha em Markdown.
@@ -722,7 +758,7 @@ def _obter_ocr_engine():
         try:
             _OCR_ENGINE = RapidOCR()
         except Exception as e:
-            print(f"[OCR] Erro ao inicializar motor OCR: {e}")
+            logger.exception("Erro ao inicializar motor OCR", extra={"request_id": "-"})
             _OCR_ENGINE = False
             return None
     return None if _OCR_ENGINE is False else _OCR_ENGINE
@@ -791,7 +827,12 @@ def _ocr_pagina_pdf(doc, pagina_idx: int) -> str:
         resultado = engine(imagem)
         return _ocr_resultado_para_texto(resultado)
     except Exception as e:
-        print(f"[OCR] Erro na pagina {pagina_idx + 1}: {e}")
+        logger.warning(
+            "Erro na pagina OCR %s: %s",
+            pagina_idx + 1,
+            e,
+            extra={"request_id": "-"},
+        )
         return ""
 
 
@@ -800,7 +841,12 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
     ocr_usado = False
     arquivo_grande = len(conteudo) > OCR_MAX_FILE_BYTES
     if arquivo_grande:
-        print(f"[OCR] Arquivo {len(conteudo)//1024} KB > limite {OCR_MAX_FILE_BYTES//1024} KB — OCR desativado.")
+        logger.info(
+            "Arquivo %s KB > limite %s KB - OCR desativado.",
+            len(conteudo) // 1024,
+            OCR_MAX_FILE_BYTES // 1024,
+            extra={"request_id": "-"},
+        )
     try:
         if fitz is not None and OCR_HABILITADO and not arquivo_grande:
             pdf_ocr = fitz.open(stream=conteudo, filetype="pdf")
@@ -847,7 +893,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pass
 
         if ocr_usado:
-            print("[OCR] OCR aplicado durante o upload do PDF.")
+            logger.info("OCR aplicado durante o upload do PDF.", extra={"request_id": "-"})
         return resultado
     finally:
         if pdf_ocr is not None:
@@ -900,7 +946,7 @@ def _init_db():
                 """)
             conn.commit()
     except Exception as e:
-        print(f"[DB] Erro ao inicializar tabela: {e}")
+        logger.exception("Erro ao inicializar tabela do hist?rico", extra={"request_id": "-"})
 
 def _carregar_historico() -> list:
     if _DATABASE_URL:
@@ -912,7 +958,7 @@ def _carregar_historico() -> list:
                     if rows:
                         return [r[0] for r in rows]
         except Exception as e:
-            print(f"[DB] Erro ao carregar histórico: {e}")
+            logger.exception("Erro ao carregar hist?rico do banco", extra={"request_id": "-"})
     try:
         if HISTORICO_FILE.exists():
             return json.loads(HISTORICO_FILE.read_text(encoding="utf-8"))
@@ -934,9 +980,9 @@ def _migrar_se_necessario():
                 count = cur.fetchone()[0]
         if count == 0:
             _salvar_historico()
-            print(f"[DB] Migração: {len(_historico)} análise(s) importadas do arquivo.")
+            logger.info("Migra??o do hist?rico: %s an?lise(s) importadas do arquivo.", len(_historico), extra={"request_id": "-"})
     except Exception as e:
-        print(f"[DB] Erro na migração: {e}")
+        logger.exception("Erro na migra??o do hist?rico", extra={"request_id": "-"})
 
 _migrar_se_necessario()
 
@@ -954,8 +1000,7 @@ def _salvar_historico():
                 conn.commit()
             return
         except Exception as e:
-            print(f"[DB] Erro ao salvar histórico: {e}")
-    try:
+            logger.exception("Erro ao salvar hist?rico", extra={"request_id": "-"})`r`n    try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -1266,7 +1311,7 @@ async def _enriquecer_cnpj(cnpj: str) -> dict | None:
                 return json.loads(resp.read().decode())
         return await loop.run_in_executor(None, _fetch)
     except Exception as e:
-        print(f"[CNPJ] Falha ao consultar {cnpj_limpo}: {e}")
+        logger.warning("Falha ao consultar CNPJ %s: %s", cnpj_limpo, e, extra={"request_id": "-"})
         return None
 
 
@@ -1277,25 +1322,25 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
     try:
         resultado = analisar_sem_api(texto, min_confianca=PARSER_MIN_CONFIANCA)
     except Exception as e:
-        print(f"[PARSER] Erro no parser local: {e}")
+        logger.exception("Erro no parser local", extra={"request_id": "-"})
         if PARSER_FALLBACK_API:
             return await chamar_groq(texto, num_docs)
         raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
 
     texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
     if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API and not texto_longo:
-        print(
-            "[PARSER] Confiança baixa "
-            f"({resultado.get('confianca', 0)}%). Usando fallback por API."
+        logger.info(
+            "Confiança baixa (%s%%). Usando fallback por API.",
+            resultado.get("confianca", 0),
+            extra={"request_id": "-"},
         )
         return await chamar_groq(texto, num_docs)
 
     if resultado.get("usar_fallback_api") and texto_longo:
-        print(
-            "[PARSER] Documento longo demais para fallback automático; "
-            "mantendo saída do parser local para evitar timeout."
+        logger.info(
+            "Documento longo demais para fallback automático; mantendo saída do parser local para evitar timeout.",
+            extra={"request_id": "-"},
         )
-
     # enriquecimento: BrasilAPI CNPJ → razão social oficial
     cnpj_extraido = resultado.get("cnpj", "")
     if _is_identificado(cnpj_extraido):
@@ -1314,8 +1359,7 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
             if razao and orgao_ruim:
                 resultado["orgao"] = razao.title()
                 resultado["ficha"] = gerar_ficha(resultado)
-                print(f"[CNPJ] Órgão enriquecido: {razao[:80]}")
-
+                logger.info("Órgão enriquecido via CNPJ: %s", razao[:80], extra={"request_id": "-"})
     _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
     return resultado["ficha"]
 
