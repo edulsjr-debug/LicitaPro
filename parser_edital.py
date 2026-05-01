@@ -9,6 +9,7 @@ NAO_INFORMADO = "Não informado"
 
 
 MODALIDADES = [
+    ("Comparação de Preços", ["comparacao de precos", "comparacao de preco"]),
     ("Pregão Eletrônico", ["pregao eletronico", "pregao eletrônico"]),
     ("Pregão Presencial", ["pregao presencial", "pregão presencial"]),
     ("Concorrência Eletrônica", ["concorrencia eletronica", "concorrência eletrônica"]),
@@ -97,6 +98,7 @@ SEGMENTOS = [
     ),
     ("Saúde", ["saude", "hospital", "medicamento", "medico", "ambulatorial"]),
     ("Alimentação", ["alimentacao", "refeicao", "merenda", "generos alimenticios"]),
+    ("Viagens e Passagens", ["passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "bilhetes aereos", "seguro viagem", "hospedagem"]),
     ("Transporte", ["transporte", "veiculo", "frota", "combustivel", "fretamento"]),
 ]
 
@@ -367,11 +369,23 @@ def _valor_float(valor: str) -> float:
 
 def extrair_valor(texto: str) -> str:
     texto_norm = _normalizar(texto)
+    contexto_valor_forte = [
+        "valor estimado total", "valor total estimado", "valor global",
+        "valor estimado da contratacao", "valor da contratacao",
+        "valor maximo estimado", "valor maximo global", "orcamento estimado",
+    ]
     contexto_valor = [
-        "valor estimado", "valor global", "valor total estimado",
+        *contexto_valor_forte,
+        "valor estimado",
         "preco maximo", "preco de referencia", "valor de referencia",
         "valor maximo", "custo estimado", "orcamento", "dotacao",
         "estimativa", "valor anual", "valor mensal", "valor total",
+    ]
+    contexto_parcial = [
+        "taxa de agenciamento", "taxa administrativa", "taxa de administracao",
+        "valor da taxa", "percentual", "maior desconto", "desconto",
+        "valor unitario", "unitario", "por bilhete", "por item", "itens",
+        "lance minimo", "valor minimo",
     ]
     padroes = [
         re.compile(r"(?:r\$|rs)\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?|[\d]+(?:,\d{2})?)", re.IGNORECASE),
@@ -391,13 +405,26 @@ def extrair_valor(texto: str) -> str:
 
     def score_contexto(contexto: str) -> int:
         score = 0
+        if any(kw in contexto for kw in contexto_valor_forte):
+            score += 18
         if any(kw in contexto for kw in contexto_valor):
             score += 10
-        if any(kw in contexto for kw in ("valor unitario", "unitario", "mensal", "por item", "itens")):
-            score -= 4
+        if any(kw in contexto for kw in contexto_parcial):
+            score -= 14
         if any(kw in contexto for kw in ("r$", "rs", "reais")):
             score += 2
         return score
+
+    def aceitar_candidato(contexto: str, num: float) -> bool:
+        if num <= 0:
+            return False
+        if num < 100:
+            return False
+        forte = any(kw in contexto for kw in contexto_valor_forte)
+        parcial = any(kw in contexto for kw in contexto_parcial)
+        if parcial and not forte:
+            return False
+        return True
 
     candidatos: list[tuple[int, float, str]] = []
     for ctx in contexto_valor:
@@ -410,7 +437,7 @@ def extrair_valor(texto: str) -> str:
             for padrao in padroes:
                 for m in padrao.finditer(janela):
                     num = parse_valor_numerico(m.group(1))
-                    if num <= 0:
+                    if not aceitar_candidato(janela_norm, num):
                         continue
                     candidatos.append((score_contexto(janela_norm), num, f"R$ {m.group(1)}"))
             pos = texto_norm.find(ctx, pos + 1)
@@ -422,7 +449,7 @@ def extrair_valor(texto: str) -> str:
                 fim = min(len(texto), m.end() + 80)
                 contexto = texto_norm[inicio:fim]
                 num = parse_valor_numerico(m.group(1))
-                if num <= 0:
+                if not aceitar_candidato(contexto, num):
                     continue
                 candidatos.append((score_contexto(contexto), num, f"R$ {m.group(1)}"))
 
@@ -519,13 +546,123 @@ def extrair_documentos_habilitacao(texto: str, secoes: Optional[dict[str, str]] 
             unicos.append(doc)
     return unicos[:20]
 
+_SEGMENTOS_ESPECIFICOS = [
+    # termos inequívocos que valem mais que qualquer coincidência genérica
+    ("Viagens e Passagens", ["passagem aerea", "passagens aereas", "agenciamento de viagens", "bilhete aereo", "bilhetes aereos", "seguro viagem", "hospedagem"]),
+    ("Transporte", ["fretamento de aeronave", "locacao de veiculo", "transporte de passageiros"]),
+    ("Segurança", ["vigilancia patrimonial", "portaria remota", "monitoramento eletronico", "circuito fechado"]),
+    ("Limpeza e Conservação", ["limpeza e conservacao", "asseio e conservacao", "servicos de limpeza"]),
+    ("Manutenção", ["manutencao predial", "manutencao eletrica", "manutencao hidraulica"]),
+]
+
 
 def detectar_segmento(objeto: str, texto: str = "") -> str:
-    base = _normalizar(f"{objeto} {texto[:2500]}")
+    base_objeto = _normalizar(objeto)
+    base_texto = _normalizar(texto[:1500])
+    for segmento, palavras in _SEGMENTOS_ESPECIFICOS:
+        if any(p in base_objeto for p in palavras):
+            return segmento
     for segmento, palavras in SEGMENTOS:
-        if any(p in base for p in palavras):
+        if any(p in base_objeto for p in palavras):
+            return segmento
+    for segmento, palavras in _SEGMENTOS_ESPECIFICOS:
+        if any(p in base_texto for p in palavras):
+            return segmento
+    for segmento, palavras in SEGMENTOS:
+        if any(p in base_texto for p in palavras):
             return segmento
     return "Outros"
+
+
+def calcular_score_viabilidade(campos: dict[str, Any]) -> tuple[int, str, list[str]]:
+    """Score de viabilidade real da licitação (não mede qualidade da extração).
+
+    Dimensões:
+      - Aderência ao segmento  0–40
+      - Atratividade financeira 0–25
+      - Competitividade         0–20  (modalidade + critério)
+      - Duração do contrato     0–15
+    """
+    justificativas: list[str] = []
+    total = 0
+
+    # 1. Aderência ao segmento (0–40)
+    segmento = campos.get("segmento", "Outros")
+    pts_seg = {
+        "Segurança": 40, "Limpeza e Conservação": 35, "Manutenção": 25,
+        "Viagens e Passagens": 20,
+        "Obras e Infraestrutura": 10, "Tecnologia e TI": 8,
+        "Transporte": 6, "Saúde": 5, "Alimentação": 5, "Outros": 5,
+    }.get(segmento, 5)
+    total += pts_seg
+    justificativas.append(f"Segmento {segmento}: {pts_seg}/40 pts")
+
+    # 2. Atratividade financeira (0–25)
+    valor_str = campos.get("valor", "")
+    valor_num = _valor_float(valor_str) if _is_identificado(valor_str) else 0
+    if valor_num <= 0:
+        pts_fin, desc_fin = 0, "valor não identificado"
+    elif valor_num < 30_000:
+        pts_fin, desc_fin = 5, "muito baixo"
+    elif valor_num < 100_000:
+        pts_fin, desc_fin = 12, "baixo"
+    elif valor_num < 500_000:
+        pts_fin, desc_fin = 20, "médio"
+    elif valor_num < 2_000_000:
+        pts_fin, desc_fin = 25, "atrativo"
+    elif valor_num < 10_000_000:
+        pts_fin, desc_fin = 18, "alto"
+    else:
+        pts_fin, desc_fin = 10, "muito alto"
+    total += pts_fin
+    justificativas.append(f"Valor {desc_fin} ({valor_str or 'não identificado'}): {pts_fin}/25 pts")
+
+    # 3. Competitividade: modalidade + critério (0–20)
+    mod_norm = _normalizar(campos.get("modalidade", ""))
+    crit_norm = _normalizar(campos.get("criterio_julgamento", ""))
+    if "inexigibilidade" in mod_norm:
+        pts_comp, desc_comp = 20, "inexigibilidade (sem concorrência)"
+    elif "dispensa" in mod_norm:
+        pts_comp, desc_comp = 16, "dispensa (baixa concorrência)"
+    elif "chamamento" in mod_norm:
+        pts_comp, desc_comp = 13, "chamamento público"
+    elif "tomada" in mod_norm:
+        pts_comp, desc_comp = 12, "tomada de preços"
+    elif "tecnica e preco" in crit_norm or "melhor tecnica" in crit_norm:
+        pts_comp, desc_comp = 13, "técnica e preço (qualidade valorizada)"
+    elif "maior desconto" in crit_norm:
+        pts_comp, desc_comp = 9, "maior desconto"
+    elif "menor preco" in crit_norm:
+        pts_comp, desc_comp = 7, "menor preço (alta concorrência)"
+    else:
+        pts_comp, desc_comp = 8, "modalidade padrão"
+    total += pts_comp
+    justificativas.append(f"Competitividade ({desc_comp}): {pts_comp}/20 pts")
+
+    # 4. Duração do contrato (0–15)
+    prazo_str = campos.get("prazo_vigencia", "")
+    meses = 0
+    if _is_identificado(prazo_str):
+        m = re.search(r"(\d+)\s*(dia|mes|ano)", _normalizar(prazo_str))
+        if m:
+            n, un = int(m.group(1)), m.group(2)
+            meses = n * 12 if "ano" in un else (n if "mes" in un else n // 30)
+    if meses <= 0:
+        pts_dur, desc_dur = 8, "prazo não identificado (assume 12 meses)"
+    elif meses >= 24:
+        pts_dur, desc_dur = 15, "longo (≥24 meses)"
+    elif meses >= 12:
+        pts_dur, desc_dur = 12, "adequado (12–23 meses)"
+    elif meses >= 6:
+        pts_dur, desc_dur = 8, "curto (6–11 meses)"
+    else:
+        pts_dur, desc_dur = 4, "muito curto (<6 meses)"
+    total += pts_dur
+    justificativas.append(f"Duração {desc_dur}: {pts_dur}/15 pts")
+
+    total = max(10, min(100, total))
+    nivel = "Alta" if total >= 75 else "Média" if total >= 50 else "Baixa"
+    return total, nivel, justificativas
 
 
 def calcular_confianca(campos: dict[str, Any]) -> tuple[int, list[str]]:
