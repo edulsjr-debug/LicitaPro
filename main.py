@@ -18,6 +18,21 @@ from pydantic import BaseModel
 
 from parser_edital import analisar_sem_api
 
+try:
+    import fitz
+except Exception:
+    fitz = None
+
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+try:
+    from rapidocr_onnxruntime import RapidOCR
+except Exception:
+    RapidOCR = None
+
 load_dotenv()
 
 app = FastAPI(title="Proxy Licitação")
@@ -31,6 +46,21 @@ try:
     PARSER_MIN_CONFIANCA = int(os.getenv("PARSER_MIN_CONFIANCA", "70"))
 except ValueError:
     PARSER_MIN_CONFIANCA = 70
+OCR_HABILITADO = os.getenv("OCR_HABILITADO", "true").lower() not in ("0", "false", "no", "off")
+try:
+    OCR_MIN_CHAR = int(os.getenv("OCR_MIN_CHAR", "120"))
+except ValueError:
+    OCR_MIN_CHAR = 120
+try:
+    OCR_MAX_PAGINAS = int(os.getenv("OCR_MAX_PAGINAS", "20"))
+except ValueError:
+    OCR_MAX_PAGINAS = 20
+try:
+    OCR_DPI = int(os.getenv("OCR_DPI", "220"))
+except ValueError:
+    OCR_DPI = 220
+
+_OCR_ENGINE = None
 
 _stats = {
     "total_analises": 0,
@@ -620,12 +650,96 @@ class AnalisarResponse(BaseModel):
     ficha: str
 
 
-def extrair_texto(nome: str, conteudo: bytes) -> str:
-    nome_lower = nome.lower()
-    if nome_lower.endswith(".pdf"):
+def _obter_ocr_engine():
+    global _OCR_ENGINE
+    if not OCR_HABILITADO or RapidOCR is None:
+        return None
+    if _OCR_ENGINE is None:
+        try:
+            _OCR_ENGINE = RapidOCR()
+        except Exception as e:
+            print(f"[OCR] Erro ao inicializar motor OCR: {e}")
+            _OCR_ENGINE = False
+            return None
+    return None if _OCR_ENGINE is False else _OCR_ENGINE
+
+
+def _texto_precisa_ocr(texto: str) -> bool:
+    texto_limpo = re.sub(r"\s+", "", texto or "")
+    return OCR_HABILITADO and len(texto_limpo) < OCR_MIN_CHAR
+
+
+def _ocr_resultado_para_texto(resultado) -> str:
+    if not resultado:
+        return ""
+
+    if isinstance(resultado, tuple) and resultado:
+        resultado = resultado[0]
+
+    linhas = []
+    for item in resultado:
+        if not item:
+            continue
+        try:
+            box, texto, *_ = item
+        except Exception:
+            continue
+        texto = str(texto or "").strip()
+        if not texto:
+            continue
+        x = 0
+        y = 0
+        try:
+            if box:
+                xs = [p[0] for p in box]
+                ys = [p[1] for p in box]
+                x = min(xs)
+                y = min(ys)
+        except Exception:
+            pass
+        linhas.append((y, x, texto))
+
+    linhas.sort(key=lambda item: (item[0], item[1]))
+    return "\n".join(texto for _, _, texto in linhas).strip()
+
+
+def _ocr_pagina_pdf(doc, pagina_idx: int) -> str:
+    if fitz is None or np is None:
+        return ""
+    engine = _obter_ocr_engine()
+    if engine is None:
+        return ""
+
+    try:
+        pagina = doc[pagina_idx]
+        matriz = fitz.Matrix(OCR_DPI / 72.0, OCR_DPI / 72.0)
+        pix = pagina.get_pixmap(matrix=matriz, alpha=False)
+        imagem = np.frombuffer(pix.samples, dtype=np.uint8)
+        if pix.n == 1:
+            imagem = imagem.reshape(pix.height, pix.width)
+            imagem = np.stack([imagem] * 3, axis=-1)
+        else:
+            imagem = imagem.reshape(pix.height, pix.width, pix.n)
+            if imagem.shape[2] > 3:
+                imagem = imagem[:, :, :3]
+            elif imagem.shape[2] == 1:
+                imagem = np.repeat(imagem, 3, axis=2)
+        resultado = engine(imagem)
+        return _ocr_resultado_para_texto(resultado)
+    except Exception as e:
+        print(f"[OCR] Erro na pagina {pagina_idx + 1}: {e}")
+        return ""
+
+
+def _extrair_texto_pdf(conteudo: bytes) -> str:
+    pdf_ocr = None
+    ocr_usado = False
+    try:
+        if fitz is not None and OCR_HABILITADO:
+            pdf_ocr = fitz.open(stream=conteudo, filetype="pdf")
         with pdfplumber.open(io.BytesIO(conteudo)) as pdf:
             partes = []
-            for p in pdf.pages:
+            for indice, p in enumerate(pdf.pages):
                 texto = p.extract_text() or ""
                 if not texto.strip():
                     try:
@@ -634,8 +748,28 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
                             texto = " ".join(w["text"] for w in words)
                     except Exception:
                         pass
+
+                if _texto_precisa_ocr(texto) and pdf_ocr is not None and indice < OCR_MAX_PAGINAS:
+                    texto_ocr = _ocr_pagina_pdf(pdf_ocr, indice)
+                    if texto_ocr.strip():
+                        texto = texto_ocr
+                        ocr_usado = True
+
                 partes.append(texto)
+
         resultado = "\n".join(partes).strip()
+        if not resultado:
+            # último recurso: OCR em sequência quando a extração nativa vier vazia.
+            if pdf_ocr is not None:
+                partes_ocr = []
+                for indice in range(min(len(pdf_ocr), OCR_MAX_PAGINAS)):
+                    texto_ocr = _ocr_pagina_pdf(pdf_ocr, indice)
+                    if texto_ocr.strip():
+                        partes_ocr.append(texto_ocr)
+                resultado = "\n".join(partes_ocr).strip()
+                if resultado:
+                    ocr_usado = True
+
         if not resultado:
             # último recurso: pdfminer.six diretamente
             try:
@@ -643,7 +777,22 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
                 resultado = (_pm_et(io.BytesIO(conteudo)) or "").strip()
             except Exception:
                 pass
+
+        if ocr_usado:
+            print("[OCR] OCR aplicado durante o upload do PDF.")
         return resultado
+    finally:
+        if pdf_ocr is not None:
+            try:
+                pdf_ocr.close()
+            except Exception:
+                pass
+
+
+def extrair_texto(nome: str, conteudo: bytes) -> str:
+    nome_lower = nome.lower()
+    if nome_lower.endswith(".pdf"):
+        return _extrair_texto_pdf(conteudo)
     if nome_lower.endswith(".docx"):
         doc = docx.Document(io.BytesIO(conteudo))
         return "\n".join(p.text for p in doc.paragraphs)
