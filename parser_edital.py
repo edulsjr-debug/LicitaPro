@@ -49,6 +49,13 @@ ORGAO_PREFIXOS = [
     "associacao",
     "universidade",
     "hospital",
+    "governo",
+    "poder",
+    "diretoria",
+    "coordenadoria",
+    "ministerio publico",
+    "subprefeitura",
+    "servico nacional",
 ]
 
 SEGMENTOS = [
@@ -193,7 +200,7 @@ def identificar_secoes(texto: str) -> dict[str, str]:
 
 
 def extrair_numero_edital(texto: str) -> str:
-    original = texto[:5000]
+    original = texto[:8000]
     normalizado = _normalizar(original)  # mesmo comprimento — posições alinhadas
 
     padroes_prioritarios = [
@@ -221,6 +228,11 @@ def extrair_numero_edital(texto: str) -> str:
             r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{4})\b",
             re.IGNORECASE,
         ),
+        re.compile(
+            r"\b((?:aviso)\s+(?:de\s+)?(?:licitacao|licitação|pregao|pregão)[^\n]{0,40}?"
+            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{2,4})\b",
+            re.IGNORECASE,
+        ),
     ]
 
     def _valido(candidato: str) -> bool:
@@ -245,20 +257,22 @@ def extrair_numero_edital(texto: str) -> str:
     return NAO_IDENTIFICADO
 
 def extrair_orgao(texto: str) -> str:
-    linhas = [_limpar_linha(l) for l in texto.splitlines()[:80]]
+    linhas = [_limpar_linha(l) for l in texto.splitlines()[:150]]
     ignorar = (
         "edital", "pregão", "pregao", "processo", "aviso", "licitação",
         "licitacao", "termo de referencia", "anexo", "objeto",
     )
 
-    # busca etiquetas só no cabeçalho (primeiros 5000 chars) para não pegar
+    # busca etiquetas só no cabeçalho (primeiros 8000 chars) para não pegar
     # cláusulas como "Contratante: a) Em caso de atraso..." no corpo do contrato
-    cabecalho = texto[:5000]
+    cabecalho = texto[:8000]
     etiquetas = [
         (r"(?:órgão|orgao|unidade\s+compradora|unidade\s+gestora|entidade)\s*[:\-]\s*([^\n]{5,180})", False),
         (r"(?:órgão|orgao)\s+responsável\s*[:\-]\s*([^\n]{5,180})", False),
         # "contratante:" aceito apenas se a linha não parece cláusula (sem "caso", "atraso", "obrigação")
         (r"(?:contratante)\s*[:\-]\s*([^\n]{5,180})", True),
+        (r"(?:uasg|u\.a\.s\.g)(?:\s*[:\-]?\s*\d+)?\s*[–\-]?\s*([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ][^\n]{5,180})", False),
+        (r"(?:poder\s+licitante|unidade\s+administrativa)\s*[:\-]\s*([^\n]{5,180})", True),
         # "nome:" e "razão social:" aceitos somente se o valor começa com prefixo de órgão
         (r"(?:nome|razao\s+social)\s*[:\-]\s*([^\n]{5,180})", True),
     ]
@@ -310,12 +324,13 @@ def extrair_orgao(texto: str) -> str:
             continue
         # linha toda em maiúsculas com 2+ palavras (ex: "CAMARA MUNICIPAL DE FOO")
         linha_strip = linha.strip()
-        if len(linha_strip) >= 8 and linha_strip == linha_strip.upper() and len(linha_strip.split()) >= 2:
+        linha_alpha = ''.join(c for c in linha_strip if c.isalpha())
+        if len(linha_strip) >= 8 and linha_alpha and linha_alpha == linha_alpha.upper() and len(linha_strip.split()) >= 2:
             if not re.search(r"\b(?:edital|aviso|processo|pregao|pregão|precos|cotacao|comparacao|chamamento)\b", baixa):
                 if not re.search(r"\d+[./]\d{4}\b", baixa):  # rejeita se parece número de processo
                     return _limpar_linha(linha)[:180]
         # sigla/nome de organismo reconhecido (mínimo 3 chars para capturar "IICA")
-        if len(baixa) >= 3 and re.search(r"\b(iica|onu|unesco|oms|banco|instituto|fundacao|fundação|agencia|agência|associacao|associação)\b", baixa):
+        if len(baixa) >= 3 and re.search(r"\b(iica|onu|unesco|oms|banco|instituto|fundacao|fundação|agencia|agência|associacao|associação|conselho|prefeitura|municipio|secretaria|ministerio|tribunal|autarquia|companhia|superintendencia)\b", baixa):
             return _limpar_linha(linha)[:180]
 
     for padrao in (
@@ -385,6 +400,16 @@ def extrair_objeto(texto: str, secoes: Optional[dict[str, str]] = None) -> str:
                 break
         if linhas:
             return _limpar_linha(" ".join(linhas))[:600]
+
+    # padrão "1.1 O objeto..." / "2.1 Constitui objeto..."
+    m_obj = re.search(
+        r"\b[12]\.\d+\s+(?:[Oo]\s+)?(?:objeto|contrato\s+a\s+ser|presente)[^\n]{0,30}?[:\-]?\s*([^\n]{20,600})",
+        texto,
+    )
+    if m_obj:
+        cand = _limpar_linha(m_obj.group(1))
+        if _is_identificado(cand) and len(cand) >= 20:
+            return cand[:600]
 
     padroes = [
         r"(?:objeto\s*[:\-]\s*)([^\n]{20,600})",
@@ -542,6 +567,14 @@ def extrair_data_abertura(texto: str) -> str:
         "envio de proposta",
         "propostas ate",
         "realizacao do certame",
+        "data da sessao",
+        "data e horario",
+        "horario de abertura",
+        "horario da sessao",
+        "data de realizacao",
+        "sessao de abertura",
+        "data para entrega",
+        "limite de envio",
     ]
     positivos_medios = ["abertura", "sessao", "propostas", "certame", "disputa", "lances"]
     negativos = [
