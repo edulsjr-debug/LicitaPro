@@ -263,9 +263,30 @@ def extrair_orgao(texto: str) -> str:
         (r"(?:nome|razao\s+social)\s*[:\-]\s*([^\n]{5,180})", True),
     ]
     for padrao, precisa_prefixo in etiquetas:
-        valor = _primeiro_grupo(padrao, cabecalho)
+        match = re.search(padrao, cabecalho, re.IGNORECASE)
+        if not match:
+            continue
+        valor = _limpar_linha(match.group(1) if match.groups() else match.group(0))
         if not _is_identificado(valor):
             continue
+        valor = _limpar_linha(
+            re.split(
+                r"\b(?:projeto|endere[cç]o|cidade|uf|cnpj|telefone|e-?mail)\b\s*:?",
+                valor,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+        )
+        if _normalizar(valor).endswith(" para"):
+            for prox in cabecalho[match.end():].splitlines()[:4]:
+                prox_limpa = _limpar_linha(prox)
+                prox_norm = _normalizar(prox_limpa)
+                if not prox_limpa:
+                    continue
+                if re.match(r"^(projeto|endereco|cidade|uf|cnpj|telefone|e-?mail)\b", prox_norm):
+                    break
+                valor = _limpar_linha(f"{valor} {prox_limpa}")
+                break
         if precisa_prefixo:
             val_norm = _normalizar(valor)
             if not any(val_norm.startswith(p) for p in ORGAO_PREFIXOS):
@@ -503,6 +524,18 @@ def extrair_data_abertura(texto: str) -> str:
         "sessao de disputa",
         "inicio da disputa",
         "recebimento das propostas",
+        "recebimento de propostas",
+        "recebimento da proposta",
+        "apresentacao das propostas",
+        "apresentacao de propostas",
+        "entrega das propostas",
+        "entrega de propostas",
+        "data limite",
+        "data de entrega",
+        "prazo para apresentacao",
+        "prazo de apresentacao",
+        "prazo para envio",
+        "prazo de envio",
         "limite para recebimento",
         "envio de proposta",
         "propostas ate",
@@ -533,11 +566,18 @@ def extrair_data_abertura(texto: str) -> str:
     for match in re.finditer(padrao, texto, re.IGNORECASE):
         valor = _limpar_linha(match.group(0))
         contexto = _normalizar(texto[max(0, match.start() - 220) : match.end() + 140])
+        contexto_anterior = _normalizar(texto[max(0, match.start() - 50) : match.start()])
         peso = 0
         if any(p in contexto for p in positivos_fortes):
             peso += 18
         elif any(p in contexto for p in positivos_medios):
             peso += 7
+        if (
+            match.start() < 4000
+            and re.search(r"\bdata\s*$", contexto_anterior)
+            and any(p in contexto for p in ["comparacao de precos", "shopping numero", "dados do solicitante"])
+        ):
+            peso += 18
         if any(p in contexto for p in negativos):
             peso -= 12
         if re.search(r"\d{1,2}[:h]\d{2}", valor):
