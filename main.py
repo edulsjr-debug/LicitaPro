@@ -218,6 +218,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <style>
 :root{
   --brand-900:#061A33;--brand-800:#0A2540;--brand-700:#0E335A;
@@ -536,17 +537,54 @@ function renderFileList(){
   fl.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){removeFile(+b.dataset.rm)}});
 }
 
+async function extractPdfText(file){
+  if(typeof pdfjsLib==='undefined')return null;
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  var NL=String.fromCharCode(10);
+  var buf=await file.arrayBuffer();
+  var pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  var maxPgs=Math.min(pdf.numPages,20);
+  var parts=[];
+  for(var p=1;p<=maxPgs;p++){
+    var pg=await pdf.getPage(p);
+    var content=await pg.getTextContent();
+    var txt=content.items.map(function(it){return it.str}).join(' ');
+    if(txt.trim())parts.push(txt);
+  }
+  return parts.join(NL);
+}
+
 async function analisarArquivos(){
   if(_selectedFiles.length===0||_processing)return;
   _processing=true;
   var mc=document.getElementById('main-content');
   mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando edital…</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigências, calculando score de viabilidade. Até 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
   try{
-    var fd=new FormData();
-    for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
-    var res=await fetch('/analisar/arquivo',{method:'POST',body:fd});
-    if(!res.ok){var err=await res.json().catch(function(){return {detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
-    var resp=await res.json();
+    var allPdfs=_selectedFiles.every(function(f){return f.name.toLowerCase().endsWith('.pdf')});
+    var resp;
+    if(allPdfs&&typeof pdfjsLib!=='undefined'){
+      var partes=[];
+      for(var i=0;i<_selectedFiles.length;i++){
+        var txt=await extractPdfText(_selectedFiles[i]);
+        if(!txt||txt.trim().length<100){allPdfs=false;break;}
+        var NL2=String.fromCharCode(10);
+        partes.push('=== '+_selectedFiles[i].name+' ==='+NL2+txt);
+      }
+      if(allPdfs){
+        var sep=String.fromCharCode(10)+String.fromCharCode(10);
+        var textoCompleto=partes.join(sep);
+        var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length})});
+        if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
+        resp=await res.json();
+      }
+    }
+    if(!resp){
+      var fd=new FormData();
+      for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
+      var res=await fetch('/analisar/arquivo',{method:'POST',body:fd});
+      if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
+      resp=await res.json();
+    }
     _selectedFiles=[];
     await loadHistorico();
     _processing=false;
