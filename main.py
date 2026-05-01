@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from parser_edital import analisar_sem_api
+from parser_edital import analisar_sem_api, gerar_ficha, _is_identificado
 
 try:
     import fitz
@@ -1214,6 +1214,24 @@ def _registrar_uso_parser_local(confianca: int):
     p["confianca"] = confianca
 
 
+async def _enriquecer_cnpj(cnpj: str) -> dict | None:
+    """Consulta BrasilAPI para obter razão social oficial do CNPJ. Gratuito, sem auth."""
+    cnpj_limpo = re.sub(r"\D", "", cnpj)
+    if len(cnpj_limpo) != 14:
+        return None
+    url = f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}"
+    try:
+        loop = asyncio.get_event_loop()
+        def _fetch():
+            req = urllib.request.Request(url, headers={"User-Agent": "LicitaPRO/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode())
+        return await loop.run_in_executor(None, _fetch)
+    except Exception as e:
+        print(f"[CNPJ] Falha ao consultar {cnpj_limpo}: {e}")
+        return None
+
+
 async def analisar_com_fallback(texto: str, num_docs: int) -> str:
     if not USAR_PARSER_LOCAL:
         return await chamar_groq(texto, num_docs)
@@ -1239,6 +1257,26 @@ async def analisar_com_fallback(texto: str, num_docs: int) -> str:
             "[PARSER] Documento longo demais para fallback automático; "
             "mantendo saída do parser local para evitar timeout."
         )
+
+    # enriquecimento: BrasilAPI CNPJ → razão social oficial
+    cnpj_extraido = resultado.get("cnpj", "")
+    if _is_identificado(cnpj_extraido):
+        dados_cnpj = await _enriquecer_cnpj(cnpj_extraido)
+        if dados_cnpj:
+            razao = (dados_cnpj.get("razao_social") or "").strip()
+            orgao_atual = resultado.get("orgao", "")
+            # usa razão social oficial quando: (a) orgão não identificado,
+            # (b) orgão tem mais de 10 palavras (capturou contexto demais),
+            # (c) orgão contém artefatos de tabela PDF ("PROJETO:", "INFORMAÇÕES")
+            orgao_ruim = (
+                not _is_identificado(orgao_atual)
+                or len(orgao_atual.split()) > 10
+                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÇÕES", "ORIENTADA"))
+            )
+            if razao and orgao_ruim:
+                resultado["orgao"] = razao.title()
+                resultado["ficha"] = gerar_ficha(resultado)
+                print(f"[CNPJ] Órgão enriquecido: {razao[:80]}")
 
     _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
     return resultado["ficha"]
