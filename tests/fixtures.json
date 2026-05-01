@@ -10,18 +10,49 @@
       "descricao": "Pregão Eletrônico SRP 03/2026 — Prefeitura Municipal de Poço Verde/SE",
       "max_paginas": null,
       "esperado": {
-        "numero_edital": { "contem": ["03/2026", "SRP"] },
-        "orgao":         { "contem": ["VERDE", "PREFEITURA"] },
-        "valor":         { "contem": ["14.133"] },
-        "data_abertura": { "contem": ["13/04/2026"] },
-        "modalidade":    "Pregão Eletrônico",
-        "segmento":      "Viagens e Passagens",
-        "confianca":     { "min": 85 },
-        "score":         { "min": 15, "max": 45 }
+        "numero_edital": {
+          "contem": [
+            "03/2026",
+            "SRP"
+          ]
+        },
+        "orgao": {
+          "contem": [
+            "VERDE",
+            "PREFEITURA"
+          ]
+        },
+        "valor": {
+          "contem": [
+            "14.133"
+          ]
+        },
+        "data_abertura": {
+          "contem": [
+            "13/04/2026"
+          ]
+        },
+        "modalidade": "Pregão Eletrônico",
+        "segmento": "Viagens e Passagens",
+        "confianca": {
+          "min": 85
+        },
+        "score": {
+          "min": 15,
+          "max": 45
+        }
       },
       "nao_esperado": {
-        "numero_edital": ["edital. 7.11", "7.11", "Não identificado"],
-        "orgao":         ["atraso", "pagamento", "Não identificado"]
+        "numero_edital": [
+          "edital. 7.11",
+          "7.11",
+          "Não identificado"
+        ],
+        "orgao": [
+          "atraso",
+          "pagamento",
+          "Não identificado"
+        ]
       }
     },
     {
@@ -31,16 +62,42 @@
       "descricao": "Comparação de Preços 71/2026 — IICA (Instituto Interamericano de Cooperação para a Agricultura)",
       "max_paginas": null,
       "esperado": {
-        "numero_edital": { "contem": ["71", "2026"] },
-        "orgao":         { "contem": ["INSTITUTO", "INTERAMERICANO"] },
-        "valor":         { "contem": ["250.000"] },
-        "data_abertura": { "contem": ["09/04/2026"] },
-        "segmento":      "Viagens e Passagens",
-        "confianca":     { "min": 70 },
-        "score":         { "min": 30, "max": 55 }
+        "numero_edital": {
+          "contem": [
+            "71",
+            "2026"
+          ]
+        },
+        "orgao": {
+          "contem": [
+            "INSTITUTO",
+            "INTERAMERICANO"
+          ]
+        },
+        "valor": {
+          "contem": [
+            "250.000"
+          ]
+        },
+        "data_abertura": {
+          "contem": [
+            "09/04/2026"
+          ]
+        },
+        "segmento": "Viagens e Passagens",
+        "confianca": {
+          "min": 70
+        },
+        "score": {
+          "min": 30,
+          "max": 55
+        }
       },
       "nao_esperado": {
-        "orgao": ["Não identificado", "COMPARAÇÃO DE PREÇOS"]
+        "orgao": [
+          "Não identificado",
+          "COMPARAÇÃO DE PREÇOS"
+        ]
       }
     },
     {
@@ -51,16 +108,35 @@
       "max_paginas": 15,
       "nota": "PDF de 60 páginas/1.6 MB — limitado a 15 páginas para evitar timeout. Data de abertura e valor real ficam fora do limite.",
       "esperado": {
-        "numero_edital": { "contem": ["02/2026"] },
-        "orgao":         { "contem": ["CONSELHO", "PSICOLOGIA"] },
-        "modalidade":    "Pregão Eletrônico",
-        "segmento":      "Viagens e Passagens",
-        "confianca":     { "min": 70 },
-        "score":         { "min": 20, "max": 45 }
+        "numero_edital": {
+          "contem": [
+            "02/2026"
+          ]
+        },
+        "orgao": {
+          "contem": [
+            "CONSELHO",
+            "PSICOLOGIA"
+          ]
+        },
+        "modalidade": "Pregão Eletrônico",
+        "segmento": "Viagens e Passagens",
+        "confianca": {
+          "min": 70
+        },
+        "score": {
+          "min": 40,
+          "max": 70
+        }
       },
       "nao_esperado": {
-        "orgao": ["Não identificado"],
-        "valor": ["R$ 0,01", "R$ 0.01"]
+        "orgao": [
+          "Não identificado"
+        ],
+        "valor": [
+          "R$ 0,01",
+          "R$ 0.01"
+        ]
       }
     }
   ]

@@ -1120,29 +1120,15 @@ MAX_CHARS = 400_000
 LIMITE_PEQUENO = 15_000  # chars â€” abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
-    ("gemini", "gemini-2.5-flash-lite",                    400_000),
-    ("gemini", "gemini-2.5-flash",                         400_000),
-    (_openrouter, "meta-llama/llama-3.3-70b-instruct:free",  400_000),
-    (_openrouter, "google/gemma-3-27b-it:free",              400_000),
-    (_openrouter, "google/gemma-4-26b-a4b-it:free",          400_000),
-    (_openrouter, "nvidia/nemotron-3-super-120b-a12b:free",  400_000),
-    (_openrouter, "google/gemma-3-12b-it:free",              400_000),
-    (_openai,     "gpt-4.1-nano",                            400_000),
-    (_groq,       "llama-3.1-8b-instant",                    18_000),
-    (_groq2,      "llama-3.1-8b-instant",                    18_000),
+    ("gemini", "gemini-2.5-flash-lite",   400_000),
+    ("gemini", "gemini-2.5-flash",        400_000),
+    (_groq,    "llama-3.3-70b-versatile",  32_000),
 ]
 
 PROVEDORES_GRANDE = [
-    ("gemini", "gemini-2.5-flash-lite",                    400_000),
-    ("gemini", "gemini-2.5-flash",                         400_000),
-    (_openai,     "gpt-4.1-nano",                            400_000),
-    (_openrouter, "google/gemma-3-12b-it:free",              400_000),
-    (_openrouter, "google/gemma-3-27b-it:free",              400_000),
-    (_openrouter, "google/gemma-4-26b-a4b-it:free",          400_000),
-    (_openrouter, "meta-llama/llama-3.3-70b-instruct:free",  400_000),
-    (_openrouter, "nvidia/nemotron-3-super-120b-a12b:free",  400_000),
-    (_groq,       "llama-3.1-8b-instant",                    18_000),
-    (_groq2,      "llama-3.1-8b-instant",                    18_000),
+    ("gemini", "gemini-2.5-flash-lite",   400_000),
+    ("gemini", "gemini-2.5-flash",        400_000),
+    (_groq,    "llama-3.3-70b-versatile",  32_000),
 ]
 
 
