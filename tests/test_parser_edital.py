@@ -1,6 +1,6 @@
 import unittest
 
-from parser_edital import analisar_sem_api
+from parser_edital import analisar_sem_api, _is_identificado
 
 
 class ParserEditalTest(unittest.TestCase):
@@ -76,6 +76,41 @@ class ParserEditalTest(unittest.TestCase):
         self.assertEqual(resultado["modalidade"], "Comparação de Preços")
         self.assertEqual(resultado["segmento"], "Viagens e Passagens")
         self.assertEqual(resultado["valor"], "R$ 250.000,00")
+
+
+    def test_nao_usa_data_legal_como_abertura(self):
+        texto = """
+        CONSELHO REGIONAL DE PSICOLOGIA
+        PREGAO ELETRONICO No 02/2026
+        Objeto: contratacao de empresa para agenciamento de viagens.
+        O contrato tera vigencia a partir de 01/01/2025 e seguira a lei vigente.
+        Valor estimado total: R$ 320.000,00
+        """
+
+        resultado = analisar_sem_api(texto)
+
+        self.assertFalse(_is_identificado(resultado["data_abertura"]))
+        self.assertNotIn("01/01/2025", resultado["data_abertura"])
+
+    def test_usa_data_de_cabecalho_em_comparacao_de_precos(self):
+        texto = """
+        COMPARACAO DE PRECOS / SHOPPING NUMERO
+        071/2026
+        DATA
+        09/04/2026
+        DADOS DO SOLICITANTE
+        NOME: INSTITUTO INTERAMERICANO DE COOPERACAO PARA
+        A AGRICULTURA.
+        PROJETO: INFORMACOES FLORESTAIS
+        Objeto: emissao de passagens aereas nacionais e internacionais.
+        Valor estimado total: R$ 250.000,00
+        """
+
+        resultado = analisar_sem_api(texto)
+
+        self.assertIn("09/04/2026", resultado["data_abertura"])
+        self.assertIn("AGRICULTURA", resultado["orgao"].upper())
+        self.assertNotIn("PROJETO", resultado["orgao"].upper())
 
 
 if __name__ == "__main__":
