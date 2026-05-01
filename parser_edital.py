@@ -185,15 +185,28 @@ def identificar_secoes(texto: str) -> dict[str, str]:
 def extrair_numero_edital(texto: str) -> str:
     normalizado = _normalizar(texto)
     padroes = [
-        r"((?:pregao|concorrencia|dispensa|inexigibilidade|chamamento publico|credenciamento)(?:\s+eletronico|\s+presencial)?\s*(?:n|no|numero|nr)?\s*[.:oº°-]*\s*\d+[\w./-]*\s*/\s*\d{2,4})",
-        r"((?:edital|processo(?: administrativo)?)\s*(?:n|no|numero|nr)?\s*[.:oº°-]*\s*\d+[\w./-]*\s*/\s*\d{2,4})",
+        re.compile(
+            r"\b((?:pregao(?:\s+eletronico|\s+presencial)?|"
+            r"concorrencia(?:\s+eletronica|\s+publica)?|"
+            r"tomada\s+de\s+precos?|dispensa(?:\s+eletronica)?|"
+            r"inexigibilidade|chamamento\s+publico|credenciamento|"
+            r"rdc|dialogo\s+competitivo|p\.?e\.?|p\.?p\.?|c\.?p\.?|"
+            r"t\.?p\.?|c\.?c\.?|r\.?d\.?c\.?)"
+            r"(?:\s+(?:eletronico|presencial|eletronica|publica))?"
+            r"\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d+[\w./-]*\s*[./-]\s*\d{2,4})\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\b((?:edital|processo(?:\s+administrativo)?)\s*"
+            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d+[\w./-]*\s*[./-]\s*\d{2,4})\b",
+            re.IGNORECASE,
+        ),
     ]
     for padrao in padroes:
-        match = re.search(padrao, normalizado, re.IGNORECASE)
+        match = padrao.search(normalizado)
         if match:
-            return _limpar_linha(texto[match.start(1) : match.end(1)])
+            return _limpar_linha(match.group(1))
     return NAO_IDENTIFICADO
-
 
 def extrair_orgao(texto: str) -> str:
     linhas = [_limpar_linha(l) for l in texto.splitlines()[:60]]
@@ -305,23 +318,44 @@ def _valor_float(valor: str) -> float:
 
 
 def extrair_valor(texto: str) -> str:
+    texto_norm = _normalizar(texto)
+    contexto_valor = [
+        "valor estimado", "valor global", "valor total estimado",
+        "preco maximo", "preco de referencia", "valor de referencia",
+        "valor maximo", "custo estimado", "orcamento", "dotacao",
+        "estimativa", "valor anual", "valor mensal",
+    ]
+    re_valor = re.compile(r"R\$\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?|[\d]+(?:,\d{2})?)", re.IGNORECASE)
+
+    def parse_valor_numerico(s: str) -> float:
+        limpo = re.sub(r"[^\d,]", "", s)
+        if not limpo:
+            return 0.0
+        limpo = limpo.replace(".", "").replace(",", ".")
+        try:
+            return float(limpo)
+        except ValueError:
+            return 0.0
+
     candidatos: list[tuple[int, float, str]] = []
-    for match in re.finditer(r"R\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{2})?|R\$\s*\d+(?:,\d{2})?", texto):
-        inicio = max(0, match.start() - 120)
-        fim = min(len(texto), match.end() + 40)
-        contexto = _normalizar(texto[inicio:fim])
+    for m in re_valor.finditer(texto):
+        inicio = max(0, m.start() - 120)
+        fim = min(len(texto), m.end() + 40)
+        contexto = texto_norm[inicio:fim]
         peso = 0
-        if any(p in contexto for p in ["valor estimado", "valor total", "valor global", "preco maximo", "orcamento"]):
+        if any(kw in contexto for kw in contexto_valor):
             peso += 10
-        if any(p in contexto for p in ["unitario", "mensal", "por item"]):
+        if any(kw in contexto for kw in ("valor unitario", "unitario", "mensal", "por item")):
             peso -= 4
-        candidatos.append((peso, _valor_float(match.group(0)), _limpar_linha(match.group(0))))
+        num = parse_valor_numerico(m.group(1))
+        if num > 0:
+            candidatos.append((peso, num, f"R$ {m.group(1)}"))
 
     if not candidatos:
         return NAO_IDENTIFICADO
+
     candidatos.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return candidatos[0][2]
-
 
 def extrair_data_abertura(texto: str) -> str:
     datas = []
