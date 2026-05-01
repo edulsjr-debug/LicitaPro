@@ -92,6 +92,26 @@ class ParserEditalTest(unittest.TestCase):
         self.assertFalse(_is_identificado(resultado["data_abertura"]))
         self.assertNotIn("01/01/2025", resultado["data_abertura"])
 
+    def test_usa_data_de_cabecalho_em_comparacao_de_precos(self):
+        texto = """
+        COMPARACAO DE PRECOS / SHOPPING NUMERO
+        071/2026
+        DATA
+        09/04/2026
+        DADOS DO SOLICITANTE
+        NOME: INSTITUTO INTERAMERICANO DE COOPERACAO PARA
+        A AGRICULTURA.
+        PROJETO: INFORMACOES FLORESTAIS
+        Objeto: emissao de passagens aereas nacionais e internacionais.
+        Valor estimado total: R$ 250.000,00
+        """
+
+        resultado = analisar_sem_api(texto)
+
+        self.assertIn("09/04/2026", resultado["data_abertura"])
+        self.assertIn("AGRICULTURA", resultado["orgao"].upper())
+        self.assertNotIn("PROJETO", resultado["orgao"].upper())
+
 
 if __name__ == "__main__":
     unittest.main()
