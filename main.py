@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
+from urllib.parse import quote
 from pathlib import Path
 from typing import Optional
 
@@ -1176,10 +1177,57 @@ def montar_texto_caso_classificado(arquivos: list[UploadFile]) -> tuple[str, lis
 # â”€â”€ HistÃ³rico de anÃ¡lises â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 HISTORICO_FILE = Path("historico.json")
 _DATABASE_URL = os.getenv("DATABASE_URL")
+_SUPABASE_URL = os.getenv("SUPABASE_URL")
+_SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")
+_SUPABASE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET") or "licitapro-uploads"
 
 def _db_conn():
     import psycopg2
     return psycopg2.connect(_DATABASE_URL)
+
+
+def _usa_supabase_api() -> bool:
+    return bool(_SUPABASE_URL and _SUPABASE_KEY)
+
+
+def _supabase_headers(content_type: Optional[str] = "application/json", extra: Optional[dict] = None) -> dict:
+    headers = {
+        "apikey": _SUPABASE_KEY,
+        "Authorization": f"Bearer {_SUPABASE_KEY}",
+    }
+    if content_type:
+        headers["Content-Type"] = content_type
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _supabase_request(path: str, method: str = "GET", body: Optional[bytes] = None, content_type: Optional[str] = "application/json", extra_headers: Optional[dict] = None, expect_json: bool = True):
+    if not _usa_supabase_api():
+        raise RuntimeError("Supabase API nao configurada")
+    base = _SUPABASE_URL.rstrip("/")
+    url = base + path
+    req = urllib.request.Request(url, data=body, method=method)
+    for key, value in _supabase_headers(content_type, extra_headers).items():
+        req.add_header(key, value)
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        raw = resp.read()
+        if not raw:
+            return None
+        if expect_json:
+            return json.loads(raw.decode("utf-8"))
+        return raw
+
+
+def _supabase_ensure_bucket():
+    if not _usa_supabase_api():
+        return
+    try:
+        payload = json.dumps({"name": _SUPABASE_BUCKET, "public": False}, ensure_ascii=False).encode("utf-8")
+        _supabase_request("/storage/v1/bucket", method="POST", body=payload)
+    except Exception:
+        # bucket ja existe ou a conta nao permite criacao automatica
+        pass
 
 
 def _normalizar_meta_arquivo(nome: str, conteudo: bytes, ordem: int, extra: Optional[dict] = None) -> dict:
@@ -1197,7 +1245,15 @@ def _normalizar_meta_arquivo(nome: str, conteudo: bytes, ordem: int, extra: Opti
                 meta[chave] = valor
     return meta
 
+
+def _storage_safe_name(nome: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(nome).name).strip("._")
+    return base or "arquivo"
+
 def _init_db():
+    if _usa_supabase_api():
+        _supabase_ensure_bucket()
+        return
     if not _DATABASE_URL:
         return
     try:
@@ -1233,6 +1289,14 @@ def _init_db():
         logger.exception("Erro ao inicializar tabela do hist?rico", extra={"request_id": "-"})
 
 def _carregar_historico() -> list:
+    if _usa_supabase_api():
+        try:
+            rows = _supabase_request("/rest/v1/historico?select=dados", method="GET")
+            historico = [r.get("dados", r) for r in (rows or [])]
+            historico.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+            return historico
+        except Exception as e:
+            logger.exception("Erro ao carregar hist?rico do Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
         try:
             with _db_conn() as conn:
@@ -1285,7 +1349,7 @@ _historico: list = _carregar_historico()
 
 # migra automaticamente do arquivo para o banco se o banco estiver vazio
 def _migrar_se_necessario():
-    if not _DATABASE_URL or not _historico:
+    if _usa_supabase_api() or not _DATABASE_URL or not _historico:
         return
     try:
         with _db_conn() as conn:
@@ -1301,6 +1365,19 @@ def _migrar_se_necessario():
 _migrar_se_necessario()
 
 def _salvar_historico():
+    if _usa_supabase_api():
+        try:
+            for item in _historico:
+                payload = json.dumps({"id": item.get("id"), "dados": item}, ensure_ascii=False).encode("utf-8")
+                _supabase_request(
+                    "/rest/v1/historico?on_conflict=id",
+                    method="POST",
+                    body=payload,
+                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                )
+            return
+        except Exception:
+            logger.exception("Erro ao salvar historico via Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
         try:
             with _db_conn() as conn:
@@ -1453,6 +1530,28 @@ def _persistir_arquivos_analise(analise_id: str, arquivos_raw: list[tuple[str, b
     if not arquivos_raw:
         return anexos
 
+    if _usa_supabase_api():
+        try:
+            for ordem, (nome, conteudo) in enumerate(arquivos_raw):
+                extra = meta_por_nome.get(nome, {})
+                safe_name = _storage_safe_name(nome)
+                storage_path = f"{analise_id}/{ordem:02d}_{safe_name}"
+                _supabase_request(
+                    f"/storage/v1/object/{_SUPABASE_BUCKET}/{quote(storage_path, safe='/')}",
+                    method="POST",
+                    body=conteudo,
+                    content_type=mimetypes.guess_type(nome)[0] or "application/octet-stream",
+                    extra_headers={"x-upsert": "true"},
+                    expect_json=True,
+                )
+                meta = _normalizar_meta_arquivo(nome, conteudo, ordem, extra=extra)
+                meta["storage_path"] = storage_path
+                meta["bucket"] = _SUPABASE_BUCKET
+                anexos.append(meta)
+            return anexos
+        except Exception:
+            logger.exception("Erro ao salvar arquivos via Supabase API", extra={"request_id": "-"})
+
     if _DATABASE_URL:
         try:
             with _db_conn() as conn:
@@ -1502,6 +1601,14 @@ def _persistir_arquivos_analise(analise_id: str, arquivos_raw: list[tuple[str, b
 
 
 def _contar_registros_db() -> dict:
+    if _usa_supabase_api():
+        try:
+            historico = _supabase_request("/rest/v1/historico?select=id", method="GET") or []
+            anexos = sum(len(item.get("dados", {}).get("arquivos", [])) for item in (_supabase_request("/rest/v1/historico?select=dados", method="GET") or []))
+            return {"db_configured": True, "historico_rows": len(historico), "arquivo_rows": anexos}
+        except Exception as exc:
+            logger.exception("Erro ao consultar status do Supabase API", extra={"request_id": "-"})
+            return {"db_configured": True, "historico_rows": None, "arquivo_rows": None, "db_error": str(exc)}
     if not _DATABASE_URL:
         return {"db_configured": False, "historico_rows": None, "arquivo_rows": None}
     try:
@@ -2166,6 +2273,26 @@ async def get_ficha_historico(id: str):
 
 @app.get("/historico/{id}/arquivos/{arquivo_id}")
 async def baixar_arquivo_historico(id: str, arquivo_id: str):
+    if _usa_supabase_api():
+        try:
+            for r in _historico:
+                if r.get("id") != id:
+                    continue
+                for arq in r.get("arquivos", []):
+                    if arq.get("id") == arquivo_id and arq.get("storage_path"):
+                        conteudo = _supabase_request(
+                            f"/storage/v1/object/{_SUPABASE_BUCKET}/{quote(arq['storage_path'], safe='/')}",
+                            method="GET",
+                            content_type=None,
+                            expect_json=False,
+                        )
+                        return Response(
+                            content=conteudo,
+                            media_type=arq.get("mime_type") or "application/octet-stream",
+                            headers={"Content-Disposition": f'attachment; filename="{arq.get("arquivo", "arquivo")}"'}
+                        )
+        except Exception:
+            logger.exception("Erro ao baixar arquivo via Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
         try:
             with _db_conn() as conn:

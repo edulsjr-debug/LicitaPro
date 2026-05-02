@@ -198,12 +198,24 @@ Ambos monitorados pelo **UptimeRobot** a cada 5 minutos para evitar hibernação
 
 O histórico de análises é persistido no **Supabase PostgreSQL** — não se perde em redeploys.
 
-- Tabela: `historico` (campo `id` TEXT PRIMARY KEY, `dados` JSONB)
-- Tabela: `historico_arquivos` para guardar os arquivos originais enviados, com metadados e conteúdo binário
-- Na primeira inicialização com `DATABASE_URL` configurada, o sistema migra automaticamente o `historico.json` local para o banco
-- Sem `DATABASE_URL`, funciona em modo local com `historico.json` como fallback
+- Preferencialmente via API do Supabase:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY` ou `SUPABASE_SECRET_KEY`
+  - `SUPABASE_STORAGE_BUCKET` (padrão: `licitapro-uploads`)
+- O backend grava:
+  - `historico` com o JSON completo da análise
+  - arquivos originais no Supabase Storage, com metadados no histórico
+- `DATABASE_URL` continua como fallback legado para quem ainda usa conexão direta
+- Na primeira inicialização com o banco configurado, o sistema migra o `historico.json` local quando houver dados pendentes
 
 Variável de ambiente necessária:
+```
+SUPABASE_URL=https://[PROJECT_REF].supabase.co
+SUPABASE_SERVICE_ROLE_KEY=[SUA_CHAVE_SECRETA]
+SUPABASE_STORAGE_BUCKET=licitapro-uploads
+```
+
+Se você preferir manter a conexão direta ao Postgres, a URL antiga continua suportada como fallback:
 ```
 DATABASE_URL=postgresql://postgres:[SENHA]@db.[PROJETO].supabase.co:5432/postgres?sslmode=require
 ```
@@ -246,7 +258,10 @@ O repositório já inclui `render.yaml` configurado.
 | `APP_COMMIT` | Commit curto do build atual |
 | `APP_DEPLOYED_AT` | Data/hora do deploy, se informada |
 | `PARSER_MAX_CHARS_FALLBACK` | Tamanho máximo do texto para permitir fallback por API |
-| `DATABASE_URL` | Connection string do Supabase (PostgreSQL) |
+| `SUPABASE_URL` | URL do projeto Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Chave secreta server-side do Supabase |
+| `SUPABASE_STORAGE_BUCKET` | Bucket para arquivos originais |
+| `DATABASE_URL` | Connection string legada do Supabase (PostgreSQL) |
 
 **Passos para novo ambiente:**
 1. Acesse [render.com](https://render.com) → **New → Web Service**
