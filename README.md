@@ -199,6 +199,7 @@ Ambos monitorados pelo **UptimeRobot** a cada 5 minutos para evitar hibernação
 O histórico de análises é persistido no **Supabase PostgreSQL** — não se perde em redeploys.
 
 - Tabela: `historico` (campo `id` TEXT PRIMARY KEY, `dados` JSONB)
+- Tabela: `historico_arquivos` para guardar os arquivos originais enviados, com metadados e conteúdo binário
 - Na primeira inicialização com `DATABASE_URL` configurada, o sistema migra automaticamente o `historico.json` local para o banco
 - Sem `DATABASE_URL`, funciona em modo local com `historico.json` como fallback
 
@@ -267,6 +268,7 @@ O repositório já inclui `render.yaml` configurado.
 | POST | `/analisar` | Analisa texto direto (JSON) |
 | GET | `/historico` | Lista todo o histórico |
 | GET | `/historico/{id}` | Retorna ficha de uma análise |
+| GET | `/historico/{id}/arquivos/{arquivo_id}` | Baixa o arquivo original preservado |
 | POST | `/importar/arquivo` | Importa fichas prontas via arquivo |
 | POST | `/importar/texto` | Importa ficha via texto colado |
 | POST | `/api/reclassificar` | Reclassifica segmentos do histórico |
