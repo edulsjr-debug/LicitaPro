@@ -110,6 +110,29 @@ O OCR e aplicado no proprio processo de upload, sem etapa manual.
 
 ---
 
+## Fallback local (LLM local via Ollama)
+
+Quando a confianca do parser local for baixa, o sistema pode tentar um **LLM local** antes de gastar API externa (modo `auto`).
+
+Variaveis:
+
+```env
+LOCAL_LLM_ENABLED=true
+LOCAL_LLM_PROVIDER=ollama
+LOCAL_LLM_BASE_URL=http://127.0.0.1:11434
+LOCAL_LLM_MODEL=llama3.1:8b
+```
+
+Passos (Windows):
+
+```bash
+# instalar Ollama (app) e depois:
+ollama pull llama3.1:8b
+ollama serve
+```
+
+---
+
 ## Instalação local
 
 **Pré-requisitos:** Python 3.9+
@@ -143,6 +166,20 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 Acesse: **http://localhost:8000**
+
+---
+
+## Medição do parser (sem IA)
+
+Para medir o que o parser extrai hoje (sem mascarar com IA), rode:
+
+```bash
+python tests/run_fixtures.py --editais-dir C:/Users/lisia/Desktop/editais --report tests/relatorio_por_pasta.json
+python tests/generate_relatorio_precisao_md.py --in tests/relatorio_por_pasta.json --out tests/relatorio_precisao.md
+python tests/reports/build_all_reports.py
+```
+
+Os PDFs ficam em `tests/reports/pdf/` (um por pasta/caso).
 
 ---
 

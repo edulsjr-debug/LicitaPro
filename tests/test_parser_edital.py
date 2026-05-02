@@ -1,5 +1,11 @@
 import unittest
 
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+
 from parser_edital import analisar_sem_api, _is_identificado
 
 
