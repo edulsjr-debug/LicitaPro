@@ -11,3 +11,8 @@
 - Fallback local opcional via LLM (Ollama) antes de gastar API externa.
 - `historico.json` removido do repositório para não "voltar" histórico antigo a cada deploy.
 
+## v2026.05.03
+- Persistência dos arquivos originais enviados em `historico_arquivos`, vinculados ao `id` da análise.
+- Histórico agora carrega metadados dos anexos e expõe download do arquivo original por rota.
+- Interface de detalhe passou a mostrar os anexos preservados junto da ficha.
+

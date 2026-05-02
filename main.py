@@ -1,8 +1,10 @@
 import asyncio
 import io
+import hashlib
 import json
 import logging
 import os
+import mimetypes
 import re
 import uuid
 import urllib.error
@@ -10,6 +12,7 @@ import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Optional
 
 import openai
 import openpyxl
@@ -18,7 +21,7 @@ import docx
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -694,6 +697,8 @@ function renderDetalhePage(mc,r){
 
   var fichaHtml=typeof marked!=='undefined'?marked.parse(fichaClean(r.ficha)):
     `<pre style="white-space:pre-wrap;font-size:13px">${escHtml(fichaClean(r.ficha))}</pre>`;
+  var arquivosHtml=(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).length>0?
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Arquivos originais</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${(r.arquivos||[]).length} arquivo(s) preservado(s) junto desta análise.</p><div style="display:flex;flex-direction:column;gap:10px">${(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).map(function(a){var url='/historico/'+r.id+'/arquivos/'+a.id;return `<div class="stat-card" style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px"><div style="min-width:0"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(a.arquivo||'arquivo')}</div><div style="font-size:12px;color:var(--fg-3);margin-top:4px">${escHtml(a.mime_type||'application/octet-stream')} · ${a.tamanho_bytes?Math.round(a.tamanho_bytes/1024)+' KB':'—'}</div></div><a class="btn btn-secondary btn-sm" href="${url}">Baixar</a></div>`;}).join('')}</div></div>` : '';
 
   mc.innerHTML=
     `<div class="page"><button class="back-btn" onclick="showPage('editais')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>Voltar para editais</button>` +
@@ -707,6 +712,7 @@ function renderDetalhePage(mc,r){
     `</div>` +
     `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'â€”')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'â€”')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'â€”'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'â€”'}</div></div></div>` +
     exigHTML +
+    arquivosHtml +
     `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:16px">Ficha completa</h3><div class="ficha-content">${fichaHtml}</div></div>` +
     `<div class="action-row"><button class="btn btn-secondary" id="btn-print"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Imprimir / PDF</button><button class="btn btn-secondary" id="btn-copy"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar ficha</button><button class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Gerar proposta</button></div></div>`;
   document.getElementById('btn-print').onclick=function(){window.print()};
@@ -1172,6 +1178,22 @@ def _db_conn():
     import psycopg2
     return psycopg2.connect(_DATABASE_URL)
 
+
+def _normalizar_meta_arquivo(nome: str, conteudo: bytes, ordem: int, extra: Optional[dict] = None) -> dict:
+    meta = {
+        "id": uuid.uuid4().hex[:12],
+        "arquivo": nome,
+        "mime_type": mimetypes.guess_type(nome)[0] or "application/octet-stream",
+        "tamanho_bytes": len(conteudo),
+        "sha256": hashlib.sha256(conteudo).hexdigest(),
+        "ordem": ordem,
+    }
+    if extra:
+        for chave, valor in extra.items():
+            if valor is not None:
+                meta[chave] = valor
+    return meta
+
 def _init_db():
     if not _DATABASE_URL:
         return
@@ -1184,6 +1206,25 @@ def _init_db():
                         dados JSONB NOT NULL
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS historico_arquivos (
+                        id TEXT PRIMARY KEY,
+                        analise_id TEXT NOT NULL REFERENCES historico(id) ON DELETE CASCADE,
+                        ordem INTEGER NOT NULL,
+                        nome_original TEXT NOT NULL,
+                        mime_type TEXT,
+                        tamanho_bytes INTEGER,
+                        sha256 TEXT,
+                        tipo_extraido TEXT,
+                        chars_extraidos INTEGER,
+                        conteudo BYTEA NOT NULL,
+                        criado_em TIMESTAMPTZ DEFAULT now()
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_historico_arquivos_analise_id
+                    ON historico_arquivos (analise_id, ordem)
+                """)
             conn.commit()
     except Exception as e:
         logger.exception("Erro ao inicializar tabela do hist?rico", extra={"request_id": "-"})
@@ -1195,8 +1236,38 @@ def _carregar_historico() -> list:
                 with conn.cursor() as cur:
                     cur.execute("SELECT dados FROM historico ORDER BY dados->>'timestamp' DESC")
                     rows = cur.fetchall()
-                    if rows:
-                        return [r[0] for r in rows]
+                    historico = [r[0] for r in rows] if rows else []
+                    if historico:
+                        cur.execute("""
+                            SELECT
+                                id,
+                                analise_id,
+                                ordem,
+                                nome_original,
+                                mime_type,
+                                tamanho_bytes,
+                                sha256,
+                                tipo_extraido,
+                                chars_extraidos
+                            FROM historico_arquivos
+                            ORDER BY analise_id, ordem, criado_em
+                        """)
+                        anexos: dict[str, list[dict]] = {}
+                        for arq in cur.fetchall():
+                            analise_id = arq[1]
+                            anexos.setdefault(analise_id, []).append({
+                                "id": arq[0],
+                                "arquivo": arq[3],
+                                "mime_type": arq[4],
+                                "tamanho_bytes": arq[5],
+                                "sha256": arq[6],
+                                "ordem": arq[2],
+                                "tipo_extraido": arq[7],
+                                "chars_extraidos": arq[8],
+                            })
+                        for item in historico:
+                            item["arquivos"] = anexos.get(item.get("id"), [])
+                    return historico
         except Exception as e:
             logger.exception("Erro ao carregar hist?rico do banco", extra={"request_id": "-"})
     try:
@@ -1231,12 +1302,20 @@ def _salvar_historico():
         try:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
+                    ids_atuais = []
                     for item in _historico:
+                        ids_atuais.append(item.get("id"))
+                        item_db = {k: v for k, v in item.items() if k != "arquivos"}
                         cur.execute("""
                             INSERT INTO historico (id, dados)
                             VALUES (%s, %s::jsonb)
                             ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados
-                        """, (item.get("id"), json.dumps(item, ensure_ascii=False)))
+                        """, (item.get("id"), json.dumps(item_db, ensure_ascii=False)))
+                    if ids_atuais:
+                        cur.execute("DELETE FROM historico WHERE NOT (id = ANY(%s::text[]))", (ids_atuais,))
+                    else:
+                        cur.execute("DELETE FROM historico_arquivos")
+                        cur.execute("DELETE FROM historico")
                 conn.commit()
             return
         except Exception as e:
@@ -1345,6 +1424,99 @@ def _reclassificar_historico():
         _salvar_historico()
 
 _reclassificar_historico()
+
+
+def _normalizar_meta_extracao(meta_arquivos: Optional[list[dict]]) -> dict[str, dict]:
+    saida: dict[str, dict] = {}
+    for item in meta_arquivos or []:
+        nome = item.get("arquivo") or item.get("nome")
+        if not nome:
+            continue
+        chars = item.get("chars")
+        try:
+            chars_int = int(chars) if chars not in (None, "") else None
+        except Exception:
+            chars_int = None
+        saida[nome] = {
+            "tipo_extraido": item.get("tipo"),
+            "chars_extraidos": chars_int,
+        }
+    return saida
+
+
+def _persistir_arquivos_analise(analise_id: str, arquivos_raw: list[tuple[str, bytes]], meta_arquivos: Optional[list[dict]] = None) -> list[dict]:
+    anexos: list[dict] = []
+    meta_por_nome = _normalizar_meta_extracao(meta_arquivos)
+    if not arquivos_raw:
+        return anexos
+
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM historico_arquivos WHERE analise_id = %s", (analise_id,))
+                    for ordem, (nome, conteudo) in enumerate(arquivos_raw):
+                        extra = meta_por_nome.get(nome, {})
+                        meta = _normalizar_meta_arquivo(nome, conteudo, ordem, extra=extra)
+                        cur.execute("""
+                            INSERT INTO historico_arquivos (
+                                id, analise_id, ordem, nome_original, mime_type,
+                                tamanho_bytes, sha256, tipo_extraido, chars_extraidos, conteudo
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO UPDATE SET
+                                analise_id = EXCLUDED.analise_id,
+                                ordem = EXCLUDED.ordem,
+                                nome_original = EXCLUDED.nome_original,
+                                mime_type = EXCLUDED.mime_type,
+                                tamanho_bytes = EXCLUDED.tamanho_bytes,
+                                sha256 = EXCLUDED.sha256,
+                                tipo_extraido = EXCLUDED.tipo_extraido,
+                                chars_extraidos = EXCLUDED.chars_extraidos,
+                                conteudo = EXCLUDED.conteudo
+                        """, (
+                            meta["id"],
+                            analise_id,
+                            ordem,
+                            nome,
+                            meta["mime_type"],
+                            meta["tamanho_bytes"],
+                            meta["sha256"],
+                            meta.get("tipo_extraido"),
+                            meta.get("chars_extraidos"),
+                            conteudo,
+                        ))
+                        anexos.append(meta)
+                conn.commit()
+            return anexos
+        except Exception:
+            logger.exception("Erro ao salvar arquivos do hist?rico", extra={"request_id": "-"})
+
+    for ordem, (nome, conteudo) in enumerate(arquivos_raw):
+        extra = meta_por_nome.get(nome, {})
+        anexos.append(_normalizar_meta_arquivo(nome, conteudo, ordem, extra=extra))
+    return anexos
+
+
+def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto"):
+    analise_id = uuid.uuid4().hex[:10]
+    anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
+    registro = {
+        "id":        analise_id,
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "orgao":     extrair_campo(ficha, "Ãƒâ€œrgÃƒÂ£o"),
+        "valor":     extrair_campo(ficha, "Valor Estimado Total"),
+        "objeto":    extrair_objeto(ficha),
+        "segmento":  detectar_segmento(ficha),
+        "score":     extrair_score(ficha),
+        "ficha":     ficha,
+        "arquivos":  anexos,
+        "fonte":     fonte,
+    }
+    _historico.insert(0, registro)
+    if len(_historico) > 500:
+        _historico.pop()
+    _salvar_historico()
 
 
 MAX_CHARS = 400_000
@@ -1935,7 +2107,7 @@ async def importar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             ficha = texto[texto.find("## FICHA"):]
         else:
             ficha = "## FICHA DE LICITAÇÃO\n\n" + texto
-        registrar_analise(ficha)
+        registrar_analise(ficha, arquivos_raw=[(arq.filename, conteudo)], fonte="importacao")
         importados.append(arq.filename)
     _audit("importar_arquivo_done", request.state.request_id, importados=len(importados), ignorados=len(ignorados))
     return {"importados": importados, "ignorados": ignorados}
@@ -1969,8 +2141,32 @@ async def get_historico():
 async def get_ficha_historico(id: str):
     for r in _historico:
         if r["id"] == id:
-            return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score")}
+            return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score"), "arquivos": r.get("arquivos", []), "fonte": r.get("fonte")}
     raise HTTPException(404, "Análise não encontrada.")
+
+
+@app.get("/historico/{id}/arquivos/{arquivo_id}")
+async def baixar_arquivo_historico(id: str, arquivo_id: str):
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT nome_original, mime_type, conteudo
+                        FROM historico_arquivos
+                        WHERE analise_id = %s AND id = %s
+                    """, (id, arquivo_id))
+                    row = cur.fetchone()
+                    if row:
+                        nome, mime_type, conteudo = row
+                        return Response(
+                            content=bytes(conteudo),
+                            media_type=mime_type or "application/octet-stream",
+                            headers={"Content-Disposition": f'attachment; filename="{nome}"'}
+                        )
+        except Exception:
+            logger.exception("Erro ao baixar arquivo do hist?rico", extra={"request_id": "-"})
+    raise HTTPException(404, "Arquivo nÃ£o encontrado.")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2030,7 +2226,7 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
         texto_completo = "\n\n".join(partes)
     ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
     _stats["analises_hoje"] += 1
-    registrar_analise(ficha)
+    registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
     _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
     return AnalisarResponse(ficha=ficha)
 
