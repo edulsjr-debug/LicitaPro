@@ -2,6 +2,35 @@ services:
   - type: web
     name: licitapro
     runtime: python
+    branch: master
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_API_KEY2
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_VERSION
+        sync: false
+      - key: APP_CHANNEL
+        sync: false
+      - key: APP_COMMIT
+        sync: false
+      - key: APP_DEPLOYED_AT
+        sync: false
+
+  - type: web
+    name: licitapro-dev
+    runtime: python
+    branch: dev
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
