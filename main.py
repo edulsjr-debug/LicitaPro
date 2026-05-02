@@ -1501,6 +1501,22 @@ def _persistir_arquivos_analise(analise_id: str, arquivos_raw: list[tuple[str, b
     return anexos
 
 
+def _contar_registros_db() -> dict:
+    if not _DATABASE_URL:
+        return {"db_configured": False, "historico_rows": None, "arquivo_rows": None}
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM historico")
+                historico_rows = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM historico_arquivos")
+                arquivo_rows = int(cur.fetchone()[0])
+        return {"db_configured": True, "historico_rows": historico_rows, "arquivo_rows": arquivo_rows}
+    except Exception as exc:
+        logger.exception("Erro ao consultar status do banco", extra={"request_id": "-"})
+        return {"db_configured": True, "historico_rows": None, "arquivo_rows": None, "db_error": str(exc)}
+
+
 def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto"):
     analise_id = uuid.uuid4().hex[:10]
     anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
@@ -2170,6 +2186,11 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
         except Exception:
             logger.exception("Erro ao baixar arquivo do hist?rico", extra={"request_id": "-"})
     raise HTTPException(404, "Arquivo nÃƒÂ£o encontrado.")
+
+
+@app.get("/api/storage-check")
+async def storage_check():
+    return _contar_registros_db()
 
 
 @app.get("/", response_class=HTMLResponse)
