@@ -111,8 +111,8 @@ except ValueError:
     MAX_PAGINAS_GRANDES = 15
 APP_VERSION = os.getenv("APP_VERSION", "dev")
 APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
-APP_COMMIT = os.getenv("APP_COMMIT", "local")
-APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT", "")
+APP_COMMIT = os.getenv("APP_COMMIT") or os.getenv("RENDER_GIT_COMMIT") or "local"
+APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT") or ""
 APP_VERSION_LABEL = f"{APP_VERSION} Â· {APP_CHANNEL}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
