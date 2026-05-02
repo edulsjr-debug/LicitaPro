@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import io
 import hashlib
 import json
@@ -76,11 +76,11 @@ def _audit(event: str, request_id: str = "-", **fields):
             payload[key] = value
     logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), extra={"request_id": request_id})
 
-app = FastAPI(title="Proxy LicitaÃ§Ã£o")
+app = FastAPI(title="Proxy LicitaÃƒÂ§ÃƒÂ£o")
 
 import datetime
 
-LIMITE_DIARIO = 20  # anÃ¡lises por dia
+LIMITE_DIARIO = 20  # anÃƒÂ¡lises por dia
 USAR_PARSER_LOCAL = os.getenv("USAR_PARSER_LOCAL", "true").lower() not in ("0", "false", "no", "off")
 PARSER_FALLBACK_API = os.getenv("PARSER_FALLBACK_API", "true").lower() not in ("0", "false", "no", "off")
 try:
@@ -116,7 +116,7 @@ APP_VERSION = os.getenv("APP_VERSION", "dev")
 APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
 APP_COMMIT = os.getenv("APP_COMMIT") or os.getenv("RENDER_GIT_COMMIT") or "local"
 APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT") or ""
-APP_VERSION_LABEL = f"{APP_VERSION} Â· {APP_CHANNEL}"
+APP_VERSION_LABEL = f"{APP_VERSION} Ã‚Â· {APP_CHANNEL}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
 _OCR_ENGINE = None
@@ -190,89 +190,89 @@ async def request_logging_middleware(request: Request, call_next):
         logger.exception("Unhandled request failure", extra={"request_id": request_id})
         return JSONResponse(
             status_code=500,
-            content={"detail": "Erro interno ao processar a requisiÃ§Ã£o.", "request_id": request_id},
+            content={"detail": "Erro interno ao processar a requisiÃƒÂ§ÃƒÂ£o.", "request_id": request_id},
             headers={"X-Request-ID": request_id},
         )
     response.headers["X-Request-ID"] = request_id
     return response
 
-SYSTEM_PROMPT = """VocÃª Ã© um especialista em licitaÃ§Ãµes pÃºblicas brasileiras.
-REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÃ‡ÃƒO" â€” ZERO introduÃ§Ãµes, ZERO raciocÃ­nio, ZERO explicaÃ§Ãµes. Apenas a ficha em Markdown.
-Se um dado realmente nÃ£o constar em nenhuma parte do texto, escreva "NÃ£o informado". Mas ANTES de escrever "NÃ£o informado" em qualquer campo, leia o documento INTEIRO â€” especialmente seÃ§Ãµes de habilitaÃ§Ã£o, anexos, clÃ¡usulas e condiÃ§Ãµes. Ã‰ PROIBIDO escrever "NÃ£o informado" para Documentos de HabilitaÃ§Ã£o se o edital contiver qualquer lista de documentos exigidos.
-Calcule o Valor Total de cada item (Qtd Ã— Valor Unit.).
+SYSTEM_PROMPT = """VocÃƒÂª ÃƒÂ© um especialista em licitaÃƒÂ§ÃƒÂµes pÃƒÂºblicas brasileiras.
+REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÃƒâ€¡ÃƒÆ’O" Ã¢â‚¬â€ ZERO introduÃƒÂ§ÃƒÂµes, ZERO raciocÃƒÂ­nio, ZERO explicaÃƒÂ§ÃƒÂµes. Apenas a ficha em Markdown.
+Se um dado realmente nÃƒÂ£o constar em nenhuma parte do texto, escreva "NÃƒÂ£o informado". Mas ANTES de escrever "NÃƒÂ£o informado" em qualquer campo, leia o documento INTEIRO Ã¢â‚¬â€ especialmente seÃƒÂ§ÃƒÂµes de habilitaÃƒÂ§ÃƒÂ£o, anexos, clÃƒÂ¡usulas e condiÃƒÂ§ÃƒÂµes. Ãƒâ€° PROIBIDO escrever "NÃƒÂ£o informado" para Documentos de HabilitaÃƒÂ§ÃƒÂ£o se o edital contiver qualquer lista de documentos exigidos.
+Calcule o Valor Total de cada item (Qtd Ãƒâ€” Valor Unit.).
 Siga EXATAMENTE esta estrutura:
 
-## FICHA DE LICITAÃ‡ÃƒO
+## FICHA DE LICITAÃƒâ€¡ÃƒÆ’O
 
 | Campo | Valor |
 |---|---|
-| **NÂº / Processo** | ... |
-| **Ã“rgÃ£o** | ... |
+| **NÃ‚Âº / Processo** | ... |
+| **Ãƒâ€œrgÃƒÂ£o** | ... |
 | **Modalidade** | ... |
-| **CritÃ©rio de Julgamento** | ... |
+| **CritÃƒÂ©rio de Julgamento** | ... |
 | **Valor Estimado Total** | R$ ... |
-| **VigÃªncia do Contrato** | ... |
+| **VigÃƒÂªncia do Contrato** | ... |
 | **Abertura das Propostas** | ... |
 | **Prazo para Envio de Proposta** | ... |
 
 ## Objeto
-[descriÃ§Ã£o completa do objeto licitado]
+[descriÃƒÂ§ÃƒÂ£o completa do objeto licitado]
 
-## CondiÃ§Ãµes Financeiras
+## CondiÃƒÂ§ÃƒÂµes Financeiras
 - **Garantia Contratual:** ...
 - **Prazo de Pagamento:** ...
-- **PatrimÃ´nio LÃ­quido MÃ­nimo:** ...
-- **Capital Social MÃ­nimo:** ...
+- **PatrimÃƒÂ´nio LÃƒÂ­quido MÃƒÂ­nimo:** ...
+- **Capital Social MÃƒÂ­nimo:** ...
 
 ## Posto de Atendimento
-[local/endereÃ§o onde os serviÃ§os serÃ£o prestados ou as entregas realizadas]
+[local/endereÃƒÂ§o onde os serviÃƒÂ§os serÃƒÂ£o prestados ou as entregas realizadas]
 
-## Contato do Ã“rgÃ£o
-[e-mail e telefone do responsÃ¡vel]
+## Contato do Ãƒâ€œrgÃƒÂ£o
+[e-mail e telefone do responsÃƒÂ¡vel]
 
 ## Itens a Cotar
 
-| # | DescriÃ§Ã£o | Unid. | Qtd. | Valor Unit. | Valor Total |
+| # | DescriÃƒÂ§ÃƒÂ£o | Unid. | Qtd. | Valor Unit. | Valor Total |
 |---|-----------|-------|------|-------------|-------------|
 | 1 | ... | ... | ... | R$ ... | R$ ... |
 
 ## Modelo de Proposta
-[tipo de taxa, o que Ã© cotado, como lanÃ§ar, observaÃ§Ãµes importantes]
+[tipo de taxa, o que ÃƒÂ© cotado, como lanÃƒÂ§ar, observaÃƒÂ§ÃƒÂµes importantes]
 
-## Documentos de HabilitaÃ§Ã£o
+## Documentos de HabilitaÃƒÂ§ÃƒÂ£o
 
-### JurÃ­dica
+### JurÃƒÂ­dica
 - ...
 
 ### Fiscal e Trabalhista
 - ...
 
-### EconÃ´mico-Financeira
+### EconÃƒÂ´mico-Financeira
 - ...
 
-### TÃ©cnica
+### TÃƒÂ©cnica
 - ...
 
-### Outras ExigÃªncias
+### Outras ExigÃƒÂªncias
 - ...
 
-## âš ï¸ Alertas
-> [ponto crÃ­tico relevante para a decisÃ£o de participar]
+## Ã¢Å¡Â Ã¯Â¸Â Alertas
+> [ponto crÃƒÂ­tico relevante para a decisÃƒÂ£o de participar]
 
-> [prÃ³ximo alerta, se houver]
+> [prÃƒÂ³ximo alerta, se houver]
 
 ## Score de Viabilidade
 **Score:** [inteiro de 0 a 100]
-**NÃ­vel:** [Alta | MÃ©dia | Baixa]
-**Justificativa:** [2 linhas diretas avaliando acessibilidade do objeto, dificuldade das exigÃªncias e oportunidade geral]
+**NÃƒÂ­vel:** [Alta | MÃƒÂ©dia | Baixa]
+**Justificativa:** [2 linhas diretas avaliando acessibilidade do objeto, dificuldade das exigÃƒÂªncias e oportunidade geral]
 
-## AnÃ¡lise de ExigÃªncias
-[Liste cada exigÃªncia de habilitaÃ§Ã£o com prefixo de status:]
-[ok] exigÃªncia â€” orientaÃ§Ã£o breve
-[warn] exigÃªncia â€” por que merece atenÃ§Ã£o
-[fail] exigÃªncia â€” por que Ã© restritiva
+## AnÃƒÂ¡lise de ExigÃƒÂªncias
+[Liste cada exigÃƒÂªncia de habilitaÃƒÂ§ÃƒÂ£o com prefixo de status:]
+[ok] exigÃƒÂªncia Ã¢â‚¬â€ orientaÃƒÂ§ÃƒÂ£o breve
+[warn] exigÃƒÂªncia Ã¢â‚¬â€ por que merece atenÃƒÂ§ÃƒÂ£o
+[fail] exigÃƒÂªncia Ã¢â‚¬â€ por que ÃƒÂ© restritiva
 
-CritÃ©rios: [ok]=padrÃ£o fÃ¡cil (certidÃµes online, CNPJ, atestados genÃ©ricos); [warn]=requer preparaÃ§Ã£o, prazo <15 dias, PL especÃ­fico; [fail]=muito restritivo, volume >5000 unidades, PL >R$500k, sede especÃ­fica, requisito raro."""
+CritÃƒÂ©rios: [ok]=padrÃƒÂ£o fÃƒÂ¡cil (certidÃƒÂµes online, CNPJ, atestados genÃƒÂ©ricos); [warn]=requer preparaÃƒÂ§ÃƒÂ£o, prazo <15 dias, PL especÃƒÂ­fico; [fail]=muito restritivo, volume >5000 unidades, PL >R$500k, sede especÃƒÂ­fica, requisito raro."""
 
 USER_TEMPLATE = "Analise o seguinte edital ({num_docs} documento(s)) e gere a ficha:\n\n{texto}"
 
@@ -281,7 +281,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LicitaPro â€” AnÃ¡lise de Editais</title>
+<title>LicitaPro Ã¢â‚¬â€ AnÃƒÂ¡lise de Editais</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -457,7 +457,7 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
     </button>
     <button class="nav-item" id="nav-historico" onclick="showPage('historico')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      HistÃ³rico
+      HistÃƒÂ³rico
     </button>
     <a class="nav-item" href="/status">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
@@ -465,8 +465,8 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
     </a>
   </nav>
   <div class="sidebar-footer">
-    <div class="quota-label">AnÃ¡lises hoje</div>
-    <div class="quota-val" id="quota-val">â€” / 20</div>
+    <div class="quota-label">AnÃƒÂ¡lises hoje</div>
+    <div class="quota-val" id="quota-val">Ã¢â‚¬â€ / 20</div>
     <div class="quota-bar"><div class="quota-fill" id="quota-fill" style="width:0%"></div></div>
     <div class="version-line">{APP_VERSION_LABEL}</div>
     <div class="version-sub">commit {APP_COMMIT_LABEL}</div>
@@ -486,7 +486,7 @@ var _selectedFiles=[];
 var _processing=false;
 
 function scoreColor(s){return s>=75?'#166534':s>=50?'#92400E':'#991B1B'}
-function scoreLabel(s){return s>=75?'Alta':s>=50?'MÃ©dia':'Baixa'}
+function scoreLabel(s){return s>=75?'Alta':s>=50?'MÃƒÂ©dia':'Baixa'}
 
 function scoreRing(score,size){
   if(!score)return '';
@@ -536,27 +536,29 @@ function renderEditaisPage(mc){
     return true;
   });
   var filterBtns=['todos','alta','media','baixa'].map(function(f){
-    var labels={todos:'Todos',alta:'Viabilidade alta',media:'MÃ©dia',baixa:'Baixa'};
+    var labels={todos:'Todos',alta:'Viabilidade alta',media:'MÃƒÂ©dia',baixa:'Baixa'};
     return `<button class="filter-pill${_filter===f?' active':''}" onclick="setFilter('${f}')">${labels[f]}</button>`;
   }).join('');
   var emptyBtn=_historico.length===0?`<button class="btn btn-primary" style="margin-top:16px" onclick="showPage('upload')">Analisar primeiro edital</button>`:'';
   var cards=filtered.length===0?
-    `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'FaÃ§a upload de um PDF para comeÃ§ar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
+    `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'FaÃƒÂ§a upload de um PDF para comeÃƒÂ§ar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
     filtered.map(editalCardHTML).join('');
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histÃ³rico Â· ordenados por data</p></div><button class="btn btn-primary" onclick="showPage('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">AnÃ¡lises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta Ã  meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">anÃ¡lises no histÃ³rico</div></div><div class="stat-card"><div class="lbl">Score mÃ©dio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}">${avgScore||'â€”'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage('historico')">HistÃ³rico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histÃƒÂ³rico Ã‚Â· ordenados por data</p></div><button class="btn btn-primary" onclick="showPage('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">AnÃƒÂ¡lises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta ÃƒÂ  meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">anÃƒÂ¡lises no histÃƒÂ³rico</div></div><div class="stat-card"><div class="lbl">Score mÃƒÂ©dio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}">${avgScore||'Ã¢â‚¬â€'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage('historico')">HistÃƒÂ³rico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
 }
 
 function setFilter(f){_filter=f;showPage('editais')}
 
 function editalCardHTML(r){
-  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">â€”</div>`;
+  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">—</div>`;
+  var anexos=(r.arquivos||[]).length;
   return `<div class="edital-card" onclick="openEdital('${r.id}')">` + ring +
     `<div><div class="edital-meta"><span class="edital-numero">${fmtDate(r.timestamp)}</span>` +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
-    (r.score>=85?badge('PRIORITÃRIO','badge-solid'):'') +
-    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descriÃ§Ã£o')}</div>` +
-    `<div class="edital-orgao">${escHtml(r.orgao||'Ã“rgÃ£o nÃ£o identificado')}</div></div>` +
-    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'â€”')}</div>` +
+    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
+    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descrição')}</div>` +
+    `<div class="edital-orgao">${escHtml(r.orgao||'Órgão não identificado')}</div>` +
+    `<div style="margin-top:6px;font-size:12px;color:var(--fg-3)">${anexos>0?anexos+' arquivo(s) preservado(s)':'sem anexos preservados'}</div></div>` +
+    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'—')}</div>` +
     `<div style="margin-top:6px">${viabBadge(r.score)}</div></div></div>`;
 }
 
@@ -575,7 +577,7 @@ async function openEdital(id){
 }
 
 function renderUploadPage(mc){
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigÃªncias, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF Â· DOCX Â· XLSX Â· XLS Â· TXT Â· mÃºltiplos arquivos simultÃ¢neos</div></div><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, nÃ£o escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">MÃºltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para anÃ¡lise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automÃ¡tico</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0â€“100 e lista exigÃªncias.</div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigÃƒÂªncias, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF Ã‚Â· DOCX Ã‚Â· XLSX Ã‚Â· XLS Ã‚Â· TXT Ã‚Â· mÃƒÂºltiplos arquivos simultÃƒÂ¢neos</div></div><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, nÃƒÂ£o escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">MÃƒÂºltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para anÃƒÂ¡lise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automÃƒÂ¡tico</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0Ã¢â‚¬â€œ100 e lista exigÃƒÂªncias.</div></div></div></div>`;
   var dz=document.getElementById('dropzone');
   dz.onclick=function(){document.getElementById('file-input').click()};
   dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
@@ -625,7 +627,7 @@ async function analisarArquivos(){
   if(_selectedFiles.length===0||_processing)return;
   _processing=true;
   var mc=document.getElementById('main-content');
-  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando editalâ€¦</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigÃªncias, calculando score de viabilidade. AtÃ© 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando editalÃ¢â‚¬Â¦</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigÃƒÂªncias, calculando score de viabilidade. AtÃƒÂ© 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
   try{
     var allPdfs=_selectedFiles.every(function(f){return f.name.toLowerCase().endsWith('.pdf')});
     var resp;
@@ -657,7 +659,7 @@ async function analisarArquivos(){
     _processing=false;
     var newest=_historico[0];
     if(newest){newest.ficha=resp.ficha;showPage('detalhe',newest);}else showPage('editais');
-    toast('AnÃ¡lise concluÃ­da com sucesso!');
+    toast('AnÃƒÂ¡lise concluÃƒÂ­da com sucesso!');
   }catch(e){
     _processing=false;
     toast('Erro: '+e.message,5000);
@@ -668,7 +670,7 @@ async function analisarArquivos(){
 function parseExigencias(ficha){
   var exigs=[],lines=(ficha||'').split('\\n');
   for(var i=0;i<lines.length;i++){
-    var m=lines[i].match(/^\\[(ok|warn|fail)\\]\\s*(.+?)(?:\\s*[â€”â€“-]+\\s*(.*))?$/i);
+    var m=lines[i].match(/^\\[(ok|warn|fail)\\]\\s*(.+?)(?:\\s*[Ã¢â‚¬â€Ã¢â‚¬â€œ-]+\\s*(.*))?$/i);
     if(m)exigs.push({status:m[1].toLowerCase(),title:m[2].trim(),detail:(m[3]||'').trim()});
   }
   return exigs;
@@ -677,7 +679,7 @@ function parseExigencias(ficha){
 function fichaClean(ficha){
   return (ficha||'')
     .replace(/## Score de Viabilidade[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
-    .replace(/## AnÃ¡lise de ExigÃªncias[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## AnÃƒÂ¡lise de ExigÃƒÂªncias[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
     .trim();
 }
 
@@ -690,7 +692,7 @@ var exigIcons={
 function renderDetalhePage(mc,r){
   var exigs=parseExigencias(r.ficha);
   var exigHTML=exigs.length>0?
-    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">AnÃ¡lise de exigÃªncias</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigÃªncia(s) Â· ${exigs.filter(function(e){return e.status==='ok'}).length} ok Â· ${exigs.filter(function(e){return e.status==='warn'}).length} atenÃ§Ã£o Â· ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">AnÃƒÂ¡lise de exigÃƒÂªncias</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigÃƒÂªncia(s) Ã‚Â· ${exigs.filter(function(e){return e.status==='ok'}).length} ok Ã‚Â· ${exigs.filter(function(e){return e.status==='warn'}).length} atenÃƒÂ§ÃƒÂ£o Ã‚Â· ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
     exigs.map(function(e){
       return `<div class="exig-item exig-${e.status}">${exigIcons[e.status]}<div><div class="exig-title">${escHtml(e.title)}</div>${e.detail?`<div class="exig-detail">${escHtml(e.detail)}</div>`:''}</div></div>`;
     }).join('') + `</div>` : '';
@@ -698,26 +700,26 @@ function renderDetalhePage(mc,r){
   var fichaHtml=typeof marked!=='undefined'?marked.parse(fichaClean(r.ficha)):
     `<pre style="white-space:pre-wrap;font-size:13px">${escHtml(fichaClean(r.ficha))}</pre>`;
   var arquivosHtml=(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).length>0?
-    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Arquivos originais</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${(r.arquivos||[]).length} arquivo(s) preservado(s) junto desta análise.</p><div style="display:flex;flex-direction:column;gap:10px">${(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).map(function(a){var url='/historico/'+r.id+'/arquivos/'+a.id;return `<div class="stat-card" style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px"><div style="min-width:0"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(a.arquivo||'arquivo')}</div><div style="font-size:12px;color:var(--fg-3);margin-top:4px">${escHtml(a.mime_type||'application/octet-stream')} · ${a.tamanho_bytes?Math.round(a.tamanho_bytes/1024)+' KB':'—'}</div></div><a class="btn btn-secondary btn-sm" href="${url}">Baixar</a></div>`;}).join('')}</div></div>` : '';
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Arquivos originais</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${(r.arquivos||[]).length} arquivo(s) preservado(s) junto desta anÃ¡lise.</p><div style="display:flex;flex-direction:column;gap:10px">${(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).map(function(a){var url='/historico/'+r.id+'/arquivos/'+a.id;return `<div class="stat-card" style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px"><div style="min-width:0"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(a.arquivo||'arquivo')}</div><div style="font-size:12px;color:var(--fg-3);margin-top:4px">${escHtml(a.mime_type||'application/octet-stream')} Â· ${a.tamanho_bytes?Math.round(a.tamanho_bytes/1024)+' KB':'â€”'}</div></div><a class="btn btn-secondary btn-sm" href="${url}">Baixar</a></div>`;}).join('')}</div></div>` : '';
 
   mc.innerHTML=
     `<div class="page"><button class="back-btn" onclick="showPage('editais')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>Voltar para editais</button>` +
     `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">` +
     (r.timestamp?`<span style="font-family:var(--font-mono);font-size:12px;color:var(--fg-3)">${fmtDate(r.timestamp)}</span>`:'') +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
-    (r.score>=85?badge('PRIORITÃRIO','badge-solid'):'') +
-    `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'AnÃ¡lise de edital')}</h1>` +
+    (r.score>=85?badge('PRIORITÃƒÂRIO','badge-solid'):'') +
+    `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'AnÃƒÂ¡lise de edital')}</h1>` +
     `<p style="font-size:15px;color:var(--fg-2)">${escHtml(r.orgao||'')}</p></div>` +
     (r.score?`<div style="flex-shrink:0;text-align:center">${scoreRing(r.score,120)}<div style="margin-top:8px;font-size:13px;font-weight:600;color:${scoreColor(r.score)}">Viabilidade ${scoreLabel(r.score)}</div></div>`:'') +
     `</div>` +
-    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'â€”')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'â€”')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'â€”'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'â€”'}</div></div></div>` +
+    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'Ã¢â‚¬â€')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'Ã¢â‚¬â€')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'Ã¢â‚¬â€'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'Ã¢â‚¬â€'}</div></div></div>` +
     exigHTML +
     arquivosHtml +
     `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:16px">Ficha completa</h3><div class="ficha-content">${fichaHtml}</div></div>` +
     `<div class="action-row"><button class="btn btn-secondary" id="btn-print"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Imprimir / PDF</button><button class="btn btn-secondary" id="btn-copy"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar ficha</button><button class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Gerar proposta</button></div></div>`;
   document.getElementById('btn-print').onclick=function(){window.print()};
   document.getElementById('btn-copy').onclick=function(){copiarFicha(r.id)};
-  mc.querySelector('.btn-primary:last-child').onclick=function(){toast('Em breve: geraÃ§Ã£o de proposta por IA.')};
+  mc.querySelector('.btn-primary:last-child').onclick=function(){toast('Em breve: geraÃƒÂ§ÃƒÂ£o de proposta por IA.')};
 }
 
 async function copiarFicha(id){
@@ -746,7 +748,8 @@ function renderHistoricoPage(mc){
     var s=items.filter(function(r){return r.score}).map(function(r){return r.score});
     var davg=s.length?Math.round(s.reduce(function(a,b){return a+b},0)/s.length):0;
     var altas=items.filter(function(r){return r.score>=75}).length;
-    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}">${davg||'â€”'}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
+    var anexos=items.reduce(function(acc,r){return acc + ((r.arquivos||[]).length||0)}, 0);
+    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td>${anexos}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}">${davg||'—'}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
   }).join('');
   var seg={};
   _historico.forEach(function(r){var s=r.segmento||'Outros';seg[s]=(seg[s]||0)+1});
@@ -754,7 +757,7 @@ function renderHistoricoPage(mc){
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;border:1px solid var(--border);border-radius:8px;font-size:13px"><span style="color:var(--fg-2)">${escHtml(e[0])}</span><span style="font-weight:600;color:var(--brand-600);background:var(--brand-50);padding:2px 10px;border-radius:9999px;font-size:12px">${e[1]}</span></div>`;
   }).join('');
 
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">HistÃ³rico de uso</h1><p class="page-sub">Todas as anÃ¡lises agrupadas por dia</p></div><button class="btn btn-secondary" onclick="showPage('editais')">â† Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de anÃ¡lises</div><div class="val">${_historico.length}</div><div class="sub">no histÃ³rico</div></div><div class="stat-card"><div class="lbl">Score mÃ©dio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}">${avg||'â€”'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com anÃ¡lises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma anÃ¡lise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>AnÃ¡lises</th><th>Score mÃ©dio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">HistÃƒÂ³rico de uso</h1><p class="page-sub">Todas as anÃƒÂ¡lises agrupadas por dia</p></div><button class="btn btn-secondary" onclick="showPage('editais')">Ã¢â€ Â Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de anÃƒÂ¡lises</div><div class="val">${_historico.length}</div><div class="sub">no histÃƒÂ³rico</div></div><div class="stat-card"><div class="lbl">Score mÃƒÂ©dio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}">${avg||'Ã¢â‚¬â€'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com anÃƒÂ¡lises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma anÃƒÂ¡lise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>AnÃƒÂ¡lises</th><th>Arquivos</th><th>Score mÃƒÂ©dio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
 }
 
 async function loadHistorico(){
@@ -765,7 +768,7 @@ async function loadHistorico(){
     var qv=document.getElementById('quota-val'),qf=document.getElementById('quota-fill');
     if(qv)qv.textContent=hoje+' / 20';
     if(qf)qf.style.width=Math.min(100,(hoje/20)*100)+'%';
-  }catch(e){console.error('Erro ao carregar histÃ³rico:',e)}
+  }catch(e){console.error('Erro ao carregar histÃƒÂ³rico:',e)}
 }
 
 async function initApp(){await loadHistorico();showPage('editais')}
@@ -908,7 +911,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
 
         resultado = "\n".join(partes).strip()
         if not resultado:
-            # Ãºltimo recurso: OCR em sequÃªncia quando a extraÃ§Ã£o nativa vier vazia.
+            # ÃƒÂºltimo recurso: OCR em sequÃƒÂªncia quando a extraÃƒÂ§ÃƒÂ£o nativa vier vazia.
             if pdf_ocr is not None:
                 partes_ocr = []
                 for indice in range(min(len(pdf_ocr), OCR_MAX_PAGINAS)):
@@ -920,7 +923,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                     ocr_usado = True
 
         if not resultado:
-            # Ãºltimo recurso: pdfminer.six diretamente
+            # ÃƒÂºltimo recurso: pdfminer.six diretamente
             try:
                 from pdfminer.high_level import extract_text as _pm_et
                 resultado = (_pm_et(io.BytesIO(conteudo)) or "").strip()
@@ -1043,7 +1046,7 @@ def _score_principal(nome: str, tipo: str, texto: str) -> int:
     t = _normalizar_espacos(texto[:25000]).lower()
 
     score = 0
-    # Tipo do arquivo (preferir texto “narrativo”)
+    # Tipo do arquivo (preferir texto â€œnarrativoâ€)
     if tipo == "pdf":
         score += 8
     elif tipo == "docx":
@@ -1069,17 +1072,17 @@ def _score_principal(nome: str, tipo: str, texto: str) -> int:
     if "relacao" in n or "itens" in n:
         score -= 1
 
-    # Sinais de cabeçalho de edital
+    # Sinais de cabeÃ§alho de edital
     for kw, w in (
-        ("pregão eletrônico", 10),
+        ("pregÃ£o eletrÃ´nico", 10),
         ("pregao eletronico", 10),
         ("processo", 5),
         ("uasg", 6),
         ("contratante", 4),
         ("objeto", 3),
-        ("valor total da contratação", 6),
-        ("data da sessão pública", 6),
-        ("critério de julgamento", 5),
+        ("valor total da contrataÃ§Ã£o", 6),
+        ("data da sessÃ£o pÃºblica", 6),
+        ("critÃ©rio de julgamento", 5),
         ("criterio de julgamento", 5),
     ):
         if kw in t:
@@ -1090,8 +1093,8 @@ def _score_principal(nome: str, tipo: str, texto: str) -> int:
 
 def _extrair_cabecalho_hint(texto_principal: str) -> str:
     """
-    Gera um preâmbulo estruturado (curto) para ajudar o parser em casos compostos.
-    Não substitui o texto bruto; apenas dá pistas com campos nomeados.
+    Gera um preÃ¢mbulo estruturado (curto) para ajudar o parser em casos compostos.
+    NÃ£o substitui o texto bruto; apenas dÃ¡ pistas com campos nomeados.
     """
     t = _normalizar_espacos(texto_principal[:60000])
     if not t:
@@ -1101,23 +1104,23 @@ def _extrair_cabecalho_hint(texto_principal: str) -> str:
         m = re.search(pat, t, re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
-    # Casos comuns em editais federais: "PREGÃO ELETRÔNICO Nº 90009/2026"
-    numero = first(r"\b((?:preg[aã]o\s+eletr[oô]nico|edital|processo(?:\s+administrativo)?)\s*(?:n[ºo°]\s*)?[\.: -]*\s*\d{1,6}[./-]\d{4})\b")
+    # Casos comuns em editais federais: "PREGÃƒO ELETRÃ”NICO NÂº 90009/2026"
+    numero = first(r"\b((?:preg[aÃ£]o\s+eletr[oÃ´]nico|edital|processo(?:\s+administrativo)?)\s*(?:n[ÂºoÂ°]\s*)?[\.: -]*\s*\d{1,6}[./-]\d{4})\b")
     orgao = first(r"\b((?:TRIBUNAL REGIONAL DO TRABALHO[^.]{0,140}|CONSELHO REGIONAL DE PSICOLOGIA[^.]{0,140}|PREFEITURA MUNICIPAL[^.]{0,140}|INSTITUTO INTERAMERICANO[^.]{0,160}))\b")
     valor = first(r"\b(R\$\s*[\d\.]{1,3}(?:\.[\d]{3})*(?:,\d{2})?)\b")
     data = first(r"\b(\d{2}/\d{2}/\d{4})\b")
-    modalidade = "Pregão Eletrônico" if re.search(r"\bpreg[aã]o\b", t, re.IGNORECASE) and re.search(r"\beletr[oô]nico\b", t, re.IGNORECASE) else ""
-    criterio = first(r"\b((?:menor pre[cç]o(?:\s+global|\s+por\s+item)?|maior desconto|t[eé]cnica e pre[cç]o|melhor t[eé]cnica))\b")
+    modalidade = "PregÃ£o EletrÃ´nico" if re.search(r"\bpreg[aÃ£]o\b", t, re.IGNORECASE) and re.search(r"\beletr[oÃ´]nico\b", t, re.IGNORECASE) else ""
+    criterio = first(r"\b((?:menor pre[cÃ§]o(?:\s+global|\s+por\s+item)?|maior desconto|t[eÃ©]cnica e pre[cÃ§]o|melhor t[eÃ©]cnica))\b")
 
-    linhas = ["## FICHA DE LICITAÇÃO (HINT)"]
+    linhas = ["## FICHA DE LICITAÃ‡ÃƒO (HINT)"]
     if numero:
-        linhas.append(f"- Número do edital/processo: {numero}")
+        linhas.append(f"- NÃºmero do edital/processo: {numero}")
     if orgao:
-        linhas.append(f"- Órgão: {orgao}")
+        linhas.append(f"- Ã“rgÃ£o: {orgao}")
     if modalidade:
         linhas.append(f"- Modalidade: {modalidade}")
     if criterio:
-        linhas.append(f"- Critério de julgamento: {criterio}")
+        linhas.append(f"- CritÃ©rio de julgamento: {criterio}")
     if valor:
         linhas.append(f"- Valor estimado total: {valor}")
     if data:
@@ -1131,7 +1134,7 @@ def _extrair_cabecalho_hint(texto_principal: str) -> str:
 def montar_texto_caso_classificado_raw(arquivos: list[tuple[str, bytes]]) -> tuple[str, list[dict[str, str]]]:
     """
     Monta o texto do caso priorizando o arquivo principal (classificado) e
-    adicionando um cabeçalho (hint) com campos nomeados do principal.
+    adicionando um cabeÃ§alho (hint) com campos nomeados do principal.
     """
     itens = []
     meta = []
@@ -1170,7 +1173,7 @@ def montar_texto_caso_classificado(arquivos: list[UploadFile]) -> tuple[str, lis
     return montar_texto_caso_classificado_raw([(a.filename, a.file.read()) for a in arquivos])
 
 
-# ── Histórico de análises ────────────────────────────────────────────────────
+# â”€â”€ HistÃ³rico de anÃ¡lises â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 HISTORICO_FILE = Path("historico.json")
 _DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -1329,17 +1332,17 @@ def _salvar_historico():
         pass
 
 _SEGMENTOS = [
-    ("SaÃºde",                  ["saÃºde", "saude", "mÃ©dic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirÃºrgic", "farmÃ¡c", "farmac", "ambulatorial"]),
-    ("EducaÃ§Ã£o",               ["escola", "educaÃ§Ã£o", "educacao", "pedagÃ³g", "pedagogic", "didÃ¡tic", "ensino", "aluno", "professor", "material escolar", "creche"]),
-    ("Obras e Infraestrutura", ["obras", "construÃ§Ã£o", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elÃ©tric", "eletric", "hidrÃ¡ulic", "hidraulic", "saneamento"]),
-    ("AlimentaÃ§Ã£o",            ["aliment", "merenda", "refeiÃ§Ã£o", "refeicao", "gÃªneros alimentÃ­c", "generos aliment", "nutri", "cozinha", "marmita"]),
-    ("Tecnologia e TI",        ["software", "hardware", "computador", "informÃ¡tica", "informatica", "sistema", "licenÃ§a", "servidor", " ti ", "tecnologia da informaÃ§Ã£o", "impressora"]),
-    ("Transporte",             ["veÃ­culo", "veiculo", "frota", "combustÃ­vel", "combustivel", "Ã´nibus", "onibus", "manutenÃ§Ã£o veicular", "locaÃ§Ã£o de veÃ­culo", "locacao de veiculo"]),
-    ("Viagens e Passagens",    ["passagem aÃ©rea", "passagem aerea", "passagem Ã¡rea", "bilhete aÃ©reo", "bilhete aereo", "aÃ©reo", "aereo", "aÃ©rea", "aerea", "aviaÃ§Ã£o", "aviacao", "companhia aÃ©rea", "companhia aerea", "passagem", "hospedagem", "diÃ¡ria", "diaria", "hotel", "viagem"]),
-    ("Eventos e CapacitaÃ§Ã£o",  ["evento", "congresso", "capacitaÃ§Ã£o", "capacitacao", "treinamento", "curso", "palestra", "cerimÃ´nia", "cerimonia"]),
-    ("Limpeza e ConservaÃ§Ã£o",  ["limpeza", "higien", "conservaÃ§Ã£o predial", "conservacao predial", "jardinagem", "desinfeÃ§Ã£o", "desinfecao", "asseio", "zeladoria"]),
-    ("MobiliÃ¡rio e EscritÃ³rio",["mobiliÃ¡rio", "mobiliario", "mobÃ­lia", "mobilia", "escritÃ³rio", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritÃ³rio", "material de escritorio"]),
-    ("SeguranÃ§a",              ["seguranÃ§a", "seguranca", "vigilÃ¢ncia", "vigilancia", "monitoramento", "cÃ¢mera", "camera", "cctv", "alarme", "portaria"]),
+    ("SaÃƒÂºde",                  ["saÃƒÂºde", "saude", "mÃƒÂ©dic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirÃƒÂºrgic", "farmÃƒÂ¡c", "farmac", "ambulatorial"]),
+    ("EducaÃƒÂ§ÃƒÂ£o",               ["escola", "educaÃƒÂ§ÃƒÂ£o", "educacao", "pedagÃƒÂ³g", "pedagogic", "didÃƒÂ¡tic", "ensino", "aluno", "professor", "material escolar", "creche"]),
+    ("Obras e Infraestrutura", ["obras", "construÃƒÂ§ÃƒÂ£o", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elÃƒÂ©tric", "eletric", "hidrÃƒÂ¡ulic", "hidraulic", "saneamento"]),
+    ("AlimentaÃƒÂ§ÃƒÂ£o",            ["aliment", "merenda", "refeiÃƒÂ§ÃƒÂ£o", "refeicao", "gÃƒÂªneros alimentÃƒÂ­c", "generos aliment", "nutri", "cozinha", "marmita"]),
+    ("Tecnologia e TI",        ["software", "hardware", "computador", "informÃƒÂ¡tica", "informatica", "sistema", "licenÃƒÂ§a", "servidor", " ti ", "tecnologia da informaÃƒÂ§ÃƒÂ£o", "impressora"]),
+    ("Transporte",             ["veÃƒÂ­culo", "veiculo", "frota", "combustÃƒÂ­vel", "combustivel", "ÃƒÂ´nibus", "onibus", "manutenÃƒÂ§ÃƒÂ£o veicular", "locaÃƒÂ§ÃƒÂ£o de veÃƒÂ­culo", "locacao de veiculo"]),
+    ("Viagens e Passagens",    ["passagem aÃƒÂ©rea", "passagem aerea", "passagem ÃƒÂ¡rea", "bilhete aÃƒÂ©reo", "bilhete aereo", "aÃƒÂ©reo", "aereo", "aÃƒÂ©rea", "aerea", "aviaÃƒÂ§ÃƒÂ£o", "aviacao", "companhia aÃƒÂ©rea", "companhia aerea", "passagem", "hospedagem", "diÃƒÂ¡ria", "diaria", "hotel", "viagem"]),
+    ("Eventos e CapacitaÃƒÂ§ÃƒÂ£o",  ["evento", "congresso", "capacitaÃƒÂ§ÃƒÂ£o", "capacitacao", "treinamento", "curso", "palestra", "cerimÃƒÂ´nia", "cerimonia"]),
+    ("Limpeza e ConservaÃƒÂ§ÃƒÂ£o",  ["limpeza", "higien", "conservaÃƒÂ§ÃƒÂ£o predial", "conservacao predial", "jardinagem", "desinfeÃƒÂ§ÃƒÂ£o", "desinfecao", "asseio", "zeladoria"]),
+    ("MobiliÃƒÂ¡rio e EscritÃƒÂ³rio",["mobiliÃƒÂ¡rio", "mobiliario", "mobÃƒÂ­lia", "mobilia", "escritÃƒÂ³rio", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritÃƒÂ³rio", "material de escritorio"]),
+    ("SeguranÃƒÂ§a",              ["seguranÃƒÂ§a", "seguranca", "vigilÃƒÂ¢ncia", "vigilancia", "monitoramento", "cÃƒÂ¢mera", "camera", "cctv", "alarme", "portaria"]),
 ]
 
 def detectar_segmento(texto: str) -> str:
@@ -1350,26 +1353,26 @@ def detectar_segmento(texto: str) -> str:
     return "Outros"
 
 def extrair_campo(ficha: str, campo: str) -> str:
-    # padrÃ£o markdown: | **Campo** | valor |
+    # padrÃƒÂ£o markdown: | **Campo** | valor |
     m = re.search(rf'\|\s*\*\*{re.escape(campo)}\*\*\s*\|\s*([^|\n]+)', ficha)
     if m:
         return m.group(1).strip()
-    # padrÃ£o texto puro: "Campo: valor" ou "Campo    valor"
+    # padrÃƒÂ£o texto puro: "Campo: valor" ou "Campo    valor"
     m = re.search(rf'(?:^|\n)\s*{re.escape(campo)}\s*[:\t|]+\s*([^\n]+)', ficha, re.IGNORECASE)
     if m:
         return m.group(1).strip()[:150]
-    return "NÃ£o informado"
+    return "NÃƒÂ£o informado"
 
 def extrair_objeto(ficha: str) -> str:
-    # seÃ§Ã£o markdown
+    # seÃƒÂ§ÃƒÂ£o markdown
     m = re.search(r'## Objeto\s*\n+(.+?)(?:\n##|\Z)', ficha, re.DOTALL)
     if m:
         return m.group(1).strip()[:200]
-    # seÃ§Ã£o texto puro
+    # seÃƒÂ§ÃƒÂ£o texto puro
     m = re.search(r'Objeto\s*\n+(.+?)(?:\n\n|\Z)', ficha, re.DOTALL)
     if m:
         return m.group(1).strip()[:200]
-    return "NÃ£o informado"
+    return "NÃƒÂ£o informado"
 
 def extrair_score(ficha: str) -> int:
     m = re.search(r'\*\*Score:\*\*\s*(\d+)', ficha)
@@ -1381,18 +1384,18 @@ def extrair_score(ficha: str) -> int:
     return 0
 
 def _eh_ficha(texto: str) -> bool:
-    # normaliza espaÃ§os e coloca em maiÃºsculas
+    # normaliza espaÃƒÂ§os e coloca em maiÃƒÂºsculas
     t = " ".join(texto.upper().split())
     # match direto (com ou sem acento)
-    if "FICHA DE LICITAÃ‡" in t or "FICHA DE LICITAC" in t:
+    if "FICHA DE LICITAÃƒâ€¡" in t or "FICHA DE LICITAC" in t:
         return True
     # "FICHA" + "LICITA" em qualquer lugar (cobre encoding quebrado)
     if "FICHA" in t and "LICITA" in t:
         return True
-    # fallback: presenÃ§a de vÃ¡rios campos tÃ­picos de ficha
+    # fallback: presenÃƒÂ§a de vÃƒÂ¡rios campos tÃƒÂ­picos de ficha
     campos_tipicos = [
         "VALOR ESTIMADO", "DOCUMENTOS DE HABILITA", "ITENS A COTAR",
-        "MODALIDADE", "VIGÃŠNCIA", "VIGENCIA", "CRITÃ‰RIO", "CRITERIO",
+        "MODALIDADE", "VIGÃƒÅ NCIA", "VIGENCIA", "CRITÃƒâ€°RIO", "CRITERIO",
         "PRAZO DE PAGAMENTO", "CONTATO DO", "ABERTURA",
     ]
     return sum(1 for c in campos_tipicos if c in t) >= 3
@@ -1401,7 +1404,7 @@ def registrar_analise(ficha: str):
     registro = {
         "id":        uuid.uuid4().hex[:10],
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     extrair_campo(ficha, "Ã“rgÃ£o"),
+        "orgao":     extrair_campo(ficha, "Ãƒâ€œrgÃƒÂ£o"),
         "valor":     extrair_campo(ficha, "Valor Estimado Total"),
         "objeto":    extrair_objeto(ficha),
         "segmento":  detectar_segmento(ficha),
@@ -1504,7 +1507,7 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
     registro = {
         "id":        analise_id,
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     extrair_campo(ficha, "Ãƒâ€œrgÃƒÂ£o"),
+        "orgao":     extrair_campo(ficha, "ÃƒÆ’Ã¢â‚¬Å“rgÃƒÆ’Ã‚Â£o"),
         "valor":     extrair_campo(ficha, "Valor Estimado Total"),
         "objeto":    extrair_objeto(ficha),
         "segmento":  detectar_segmento(ficha),
@@ -1521,9 +1524,9 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
 
 MAX_CHARS = 400_000
 
-# Textos pequenos: Groq e OpenRouter primeiro (gratuitos), OpenAI sÃ³ se necessÃ¡rio
+# Textos pequenos: Groq e OpenRouter primeiro (gratuitos), OpenAI sÃƒÂ³ se necessÃƒÂ¡rio
 # Textos grandes: OpenAI primeiro (melhor qualidade para docs longos)
-LIMITE_PEQUENO = 15_000  # chars â€” abaixo disso evita cobrar do OpenAI
+LIMITE_PEQUENO = 15_000  # chars Ã¢â‚¬â€ abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
     ("gemini", "gemini-2.5-flash-lite",   400_000),
@@ -1658,12 +1661,12 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
                 p["tokens"]   += tok_in + tok_out
                 p["custo_usd"] = round(p["custo_usd"] + custo, 6)
                 return ficha
-            ultimo_erro = f"Modelo {modelo} nÃ£o seguiu o formato esperado"
+            ultimo_erro = f"Modelo {modelo} nÃƒÂ£o seguiu o formato esperado"
             continue
         except openai.APITimeoutError:
             raise HTTPException(504, "Tempo limite excedido ao chamar a API.")
         except openai.APIConnectionError:
-            raise HTTPException(500, "Erro de conexÃ£o com a API.")
+            raise HTTPException(500, "Erro de conexÃƒÂ£o com a API.")
         except openai.APIStatusError as e:
             if e.status_code in (400, 401, 402, 404, 413, 429, 503):
                 msg = str(e.message)
@@ -1679,13 +1682,13 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
                         tempo = f"{segundos} segundos"
                     ultimo_erro = tempo
                 elif 'per-day' in msg or 'per_day' in msg or 'daily' in msg.lower():
-                    ultimo_erro = "algumas horas (limite diÃ¡rio atingido)"
+                    ultimo_erro = "algumas horas (limite diÃƒÂ¡rio atingido)"
                 else:
                     ultimo_erro = "alguns minutos"
                 continue
             raise HTTPException(500, f"Erro ao chamar a API: {e.message}")
 
-    raise HTTPException(503, f"Todas as IAs estÃ£o sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
+    raise HTTPException(503, f"Todas as IAs estÃƒÂ£o sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
 
 
 def _registrar_uso_parser_local(confianca: int):
@@ -1747,11 +1750,11 @@ async def _chamar_llm_local_chat(messages: list[dict], model: str) -> str:
             return content
         return ""
 
-    raise HTTPException(500, f"LOCAL_LLM_PROVIDER inválido: {LOCAL_LLM_PROVIDER}")
+    raise HTTPException(500, f"LOCAL_LLM_PROVIDER invÃ¡lido: {LOCAL_LLM_PROVIDER}")
 
 
 def _montar_ficha_a_partir_de_campos(campos: dict) -> str:
-    # Mantém compatibilidade com o restante do app (render e histórico).
+    # MantÃ©m compatibilidade com o restante do app (render e histÃ³rico).
     return gerar_ficha(campos)
 
 
@@ -1764,16 +1767,16 @@ async def tentar_fallback_llm_local(texto: str, num_docs: int) -> str | None:
         return None
 
     system = (
-        "Você é um extrator de informações de editais brasileiros.\n"
+        "VocÃª Ã© um extrator de informaÃ§Ãµes de editais brasileiros.\n"
         "Tarefa: extrair os campos principais de um edital (podem existir anexos misturados).\n"
         "\n"
         "Regras:\n"
-        "1) Responda APENAS em JSON válido (sem markdown).\n"
-        "2) Para cada campo, inclua também uma evidência curta (trecho literal do texto) que justifique.\n"
-        "3) Se houver conflito (valores unitários vs total), priorize o TOTAL do contrato/contratação.\n"
-        "4) Para datas, priorize a data/hora da sessão pública/abertura de propostas.\n"
+        "1) Responda APENAS em JSON vÃ¡lido (sem markdown).\n"
+        "2) Para cada campo, inclua tambÃ©m uma evidÃªncia curta (trecho literal do texto) que justifique.\n"
+        "3) Se houver conflito (valores unitÃ¡rios vs total), priorize o TOTAL do contrato/contrataÃ§Ã£o.\n"
+        "4) Para datas, priorize a data/hora da sessÃ£o pÃºblica/abertura de propostas.\n"
         "\n"
-        "Formato de saída:\n"
+        "Formato de saÃ­da:\n"
         "{\n"
         '  \"numero_edital\": \"...\",\n'
         '  \"orgao\": \"...\",\n'
@@ -1791,7 +1794,7 @@ async def tentar_fallback_llm_local(texto: str, num_docs: int) -> str | None:
         "  }\n"
         "}\n"
         "\n"
-        "Use 'Não identificado' quando não encontrar."
+        "Use 'NÃ£o identificado' quando nÃ£o encontrar."
     )
     user = (
         f"Documentos no caso: {num_docs}\n\n"
@@ -1821,34 +1824,34 @@ async def tentar_fallback_llm_local(texto: str, num_docs: int) -> str | None:
     def _pick_best_valor(texto_all: str, valor_llm: str) -> str:
         # tenta puxar o valor total quando houver marcador forte no texto
         t = texto_all
-        m = re.search(r"(?:valor\\s+total\\s+da\\s+contrata[cç][aã]o|total\\s+da\\s+contrata[cç][aã]o|valor\\s+estimado\\s+total)[^\\n]{0,80}?(R\\$\\s*[\\d\\.]{1,3}(?:\\.[\\d]{3})*(?:,\\d{2})?)", t, re.IGNORECASE)
+        m = re.search(r"(?:valor\\s+total\\s+da\\s+contrata[cÃ§][aÃ£]o|total\\s+da\\s+contrata[cÃ§][aÃ£]o|valor\\s+estimado\\s+total)[^\\n]{0,80}?(R\\$\\s*[\\d\\.]{1,3}(?:\\.[\\d]{3})*(?:,\\d{2})?)", t, re.IGNORECASE)
         if m:
             return m.group(1).strip()
         return valor_llm
 
     def _pick_best_data(texto_all: str, data_llm: str) -> str:
         t = texto_all
-        m = re.search(r"(?:data\\s+da\\s+sess[aã]o\\s+p[uú]blica|abertura\\s+da\\s+sess[aã]o|sess[aã]o\\s+p[uú]blica)[^\\n]{0,80}?(\\d{2}/\\d{2}/\\d{4})", t, re.IGNORECASE)
+        m = re.search(r"(?:data\\s+da\\s+sess[aÃ£]o\\s+p[uÃº]blica|abertura\\s+da\\s+sess[aÃ£]o|sess[aÃ£]o\\s+p[uÃº]blica)[^\\n]{0,80}?(\\d{2}/\\d{2}/\\d{4})", t, re.IGNORECASE)
         if m:
             return m.group(1).strip()
         return data_llm
 
-    valor_llm = (data.get("valor") or "").strip() or "Não identificado"
-    data_llm = (data.get("data_abertura") or "").strip() or "Não identificado"
+    valor_llm = (data.get("valor") or "").strip() or "NÃ£o identificado"
+    data_llm = (data.get("data_abertura") or "").strip() or "NÃ£o identificado"
     valor_corr = _pick_best_valor(texto, valor_llm)
     data_corr = _pick_best_data(texto, data_llm)
 
     campos = {
-        "numero_edital": (data.get("numero_edital") or "").strip() or "Não identificado",
-        "orgao": (data.get("orgao") or "").strip() or "Não identificado",
-        "cnpj": "Não identificado",
-        "modalidade": (data.get("modalidade") or "").strip() or "Não identificado",
-        "objeto": (data.get("objeto") or "").strip() or "Não identificado",
+        "numero_edital": (data.get("numero_edital") or "").strip() or "NÃ£o identificado",
+        "orgao": (data.get("orgao") or "").strip() or "NÃ£o identificado",
+        "cnpj": "NÃ£o identificado",
+        "modalidade": (data.get("modalidade") or "").strip() or "NÃ£o identificado",
+        "objeto": (data.get("objeto") or "").strip() or "NÃ£o identificado",
         "valor": valor_corr,
         "data_abertura": data_corr,
-        "prazo_envio_proposta": "Não identificado",
-        "prazo_vigencia": (data.get("prazo_vigencia") or "").strip() or "Não identificado",
-        "criterio_julgamento": (data.get("criterio_julgamento") or "").strip() or "Não identificado",
+        "prazo_envio_proposta": "NÃ£o identificado",
+        "prazo_vigencia": (data.get("prazo_vigencia") or "").strip() or "NÃ£o identificado",
+        "criterio_julgamento": (data.get("criterio_julgamento") or "").strip() or "NÃ£o identificado",
         "documentos_habilitacao": [],
         "segmento": detectar_segmento((data.get("objeto") or "") + "\n" + texto),
     }
@@ -1864,7 +1867,7 @@ async def tentar_fallback_llm_local(texto: str, num_docs: int) -> str | None:
 
 
 async def _enriquecer_cnpj(cnpj: str) -> dict | None:
-    """Consulta BrasilAPI para obter razÃ£o social oficial do CNPJ. Gratuito, sem auth."""
+    """Consulta BrasilAPI para obter razÃƒÂ£o social oficial do CNPJ. Gratuito, sem auth."""
     cnpj_limpo = re.sub(r"\D", "", cnpj)
     if len(cnpj_limpo) != 14:
         return None
@@ -1900,12 +1903,12 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
     # modo "parser": retorna o resultado do parser sem nunca chamar IA
     if modo == "parser":
         logger.info(
-            "Analise por parser (confiança=%s%%)",
+            "Analise por parser (confianÃ§a=%s%%)",
             resultado.get("confianca", 0),
             extra={"request_id": "-"},
         )
     else:
-        # modo "auto": fallback para IA se confiança baixa
+        # modo "auto": fallback para IA se confianÃ§a baixa
         if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
             # 1) tenta fallback local (se habilitado) antes de gastar API externa
             if LOCAL_LLM_ENABLED:
@@ -1925,7 +1928,7 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
                 except Exception as e:
                     logger.warning("Erro no LLM local: %s", e, extra={"request_id": "-"})
 
-            # 2) fallback API (com truncamento quando necessário)
+            # 2) fallback API (com truncamento quando necessÃ¡rio)
             if texto_longo:
                 corte = int(PARSER_MAX_CHARS_FALLBACK * 0.60)
                 texto_api = (
@@ -1934,7 +1937,7 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
                     + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
                 )
                 logger.info(
-                    "Confiança baixa (%s%%), doc longo (%s chars) — truncado para fallback API.",
+                    "ConfianÃ§a baixa (%s%%), doc longo (%s chars) â€” truncado para fallback API.",
                     resultado.get("confianca", 0),
                     len(texto),
                     extra={"request_id": "-"},
@@ -1942,7 +1945,7 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
             else:
                 texto_api = texto
                 logger.info(
-                    "Confiança baixa (%s%%). Usando fallback por API.",
+                    "ConfianÃ§a baixa (%s%%). Usando fallback por API.",
                     resultado.get("confianca", 0),
                     extra={"request_id": "-"},
                 )
@@ -1950,28 +1953,28 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
 
     if resultado.get("usar_fallback_api") and texto_longo and (modo == "parser" or not PARSER_FALLBACK_API):
         logger.info(
-            "Documento longo demais para fallback automático; mantendo saída do parser local.",
+            "Documento longo demais para fallback automÃ¡tico; mantendo saÃ­da do parser local.",
             extra={"request_id": "-"},
         )
-    # enriquecimento: BrasilAPI CNPJ â†’ razÃ£o social oficial
+    # enriquecimento: BrasilAPI CNPJ Ã¢â€ â€™ razÃƒÂ£o social oficial
     cnpj_extraido = resultado.get("cnpj", "")
     if _is_identificado(cnpj_extraido):
         dados_cnpj = await _enriquecer_cnpj(cnpj_extraido)
         if dados_cnpj:
             razao = (dados_cnpj.get("razao_social") or "").strip()
             orgao_atual = resultado.get("orgao", "")
-            # usa razÃ£o social oficial quando: (a) orgÃ£o nÃ£o identificado,
-            # (b) orgÃ£o tem mais de 10 palavras (capturou contexto demais),
-            # (c) orgÃ£o contÃ©m artefatos de tabela PDF ("PROJETO:", "INFORMAÃ‡Ã•ES")
+            # usa razÃƒÂ£o social oficial quando: (a) orgÃƒÂ£o nÃƒÂ£o identificado,
+            # (b) orgÃƒÂ£o tem mais de 10 palavras (capturou contexto demais),
+            # (c) orgÃƒÂ£o contÃƒÂ©m artefatos de tabela PDF ("PROJETO:", "INFORMAÃƒâ€¡Ãƒâ€¢ES")
             orgao_ruim = (
                 not _is_identificado(orgao_atual)
                 or len(orgao_atual.split()) > 10
-                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÃ‡Ã•ES", "ORIENTADA"))
+                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÃƒâ€¡Ãƒâ€¢ES", "ORIENTADA"))
             )
             if razao and orgao_ruim:
                 resultado["orgao"] = razao.title()
                 resultado["ficha"] = gerar_ficha(resultado)
-                logger.info("Ã“rgÃ£o enriquecido via CNPJ: %s", razao[:80], extra={"request_id": "-"})
+                logger.info("Ãƒâ€œrgÃƒÂ£o enriquecido via CNPJ: %s", razao[:80], extra={"request_id": "-"})
     _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
     return resultado["ficha"]
 
@@ -1981,14 +1984,14 @@ async def status():
     total   = _stats["total_analises"]
     hoje    = _stats["analises_hoje"]
     hist_n  = len(_historico)
-    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "nÃ£o informado"
+    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "nÃƒÂ£o informado"
     data_reset = _stats["hoje"]
 
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Status â€” LicitaPro</title>
+<title>Status Ã¢â‚¬â€ LicitaPro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -2052,33 +2055,33 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 <main>
   <div class="page-header">
     <h1 class="page-title">Status do sistema</h1>
-    <p class="page-sub">SessÃ£o atual &nbsp;Â·&nbsp; Reseta em: {data_reset}</p>
+    <p class="page-sub">SessÃƒÂ£o atual &nbsp;Ã‚Â·&nbsp; Reseta em: {data_reset}</p>
   </div>
 
   <div class="grid g4">
     <div class="card">
-      <div class="stat-label">AnÃ¡lises hoje</div>
+      <div class="stat-label">AnÃƒÂ¡lises hoje</div>
       <div class="stat-val">{hoje}</div>
-      <div class="stat-sub">anÃ¡lises processadas hoje</div>
+      <div class="stat-sub">anÃƒÂ¡lises processadas hoje</div>
     </div>
     <div class="card">
-      <div class="stat-label">Total na sessÃ£o</div>
+      <div class="stat-label">Total na sessÃƒÂ£o</div>
       <div class="stat-val">{total}</div>
-      <div class="stat-sub">anÃ¡lises realizadas</div>
+      <div class="stat-sub">anÃƒÂ¡lises realizadas</div>
     </div>
     <div class="card">
-      <div class="stat-label">HistÃ³rico salvo</div>
+      <div class="stat-label">HistÃƒÂ³rico salvo</div>
       <div class="stat-val">{hist_n}</div>
-      <div class="stat-sub">anÃ¡lises no arquivo</div>
+      <div class="stat-sub">anÃƒÂ¡lises no arquivo</div>
     </div>
     <div class="card">
-      <div class="stat-label">VersÃ£o vigente</div>
+      <div class="stat-label">VersÃƒÂ£o vigente</div>
       <div class="stat-val-sm">{APP_VERSION_LABEL}</div>
-      <div class="stat-sub">commit {APP_COMMIT_LABEL} Â· deploy {deploy_label}</div>
+      <div class="stat-sub">commit {APP_COMMIT_LABEL} Ã‚Â· deploy {deploy_label}</div>
     </div>
   </div>
 
-  <p class="footer-note">Atualiza automaticamente a cada 30 s &nbsp;Â·&nbsp; {_stats["hoje"]} &nbsp;Â·&nbsp; {APP_VERSION_LABEL} &nbsp;Â·&nbsp; commit {APP_COMMIT_LABEL}</p>
+  <p class="footer-note">Atualiza automaticamente a cada 30 s &nbsp;Ã‚Â·&nbsp; {_stats["hoje"]} &nbsp;Ã‚Â·&nbsp; {APP_VERSION_LABEL} &nbsp;Ã‚Â·&nbsp; commit {APP_COMMIT_LABEL}</p>
 </main>
 <script>setTimeout(()=>location.reload(),30000);</script>
 </body>
@@ -2101,12 +2104,12 @@ async def importar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             continue
         texto = (texto or "").strip()
         if not texto:
-            ignorados.append({"arquivo": arq.filename, "motivo": "nenhum texto extraído do arquivo"})
+            ignorados.append({"arquivo": arq.filename, "motivo": "nenhum texto extraÃ­do do arquivo"})
             continue
         if "## FICHA" in texto:
             ficha = texto[texto.find("## FICHA"):]
         else:
-            ficha = "## FICHA DE LICITAÇÃO\n\n" + texto
+            ficha = "## FICHA DE LICITAÃ‡ÃƒO\n\n" + texto
         registrar_analise(ficha, arquivos_raw=[(arq.filename, conteudo)], fonte="importacao")
         importados.append(arq.filename)
     _audit("importar_arquivo_done", request.state.request_id, importados=len(importados), ignorados=len(ignorados))
@@ -2119,7 +2122,7 @@ async def importar_texto(http_request: Request, request: AnalisarRequest):
     if not texto:
         raise HTTPException(400, "Texto vazio.")
     _audit("importar_texto_start", http_request.state.request_id, chars=len(texto), num_docs=request.num_docs)
-    ficha = texto[texto.find("## FICHA"):] if "## FICHA" in texto else "## FICHA DE LICITAÇÃO\n\n" + texto
+    ficha = texto[texto.find("## FICHA"):] if "## FICHA" in texto else "## FICHA DE LICITAÃ‡ÃƒO\n\n" + texto
     registrar_analise(ficha)
     _audit("importar_texto_done", http_request.state.request_id, chars=len(texto), num_docs=request.num_docs)
     return {"ok": True}
@@ -2142,7 +2145,7 @@ async def get_ficha_historico(id: str):
     for r in _historico:
         if r["id"] == id:
             return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score"), "arquivos": r.get("arquivos", []), "fonte": r.get("fonte")}
-    raise HTTPException(404, "Análise não encontrada.")
+    raise HTTPException(404, "AnÃ¡lise nÃ£o encontrada.")
 
 
 @app.get("/historico/{id}/arquivos/{arquivo_id}")
@@ -2166,7 +2169,7 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
                         )
         except Exception:
             logger.exception("Erro ao baixar arquivo do hist?rico", extra={"request_id": "-"})
-    raise HTTPException(404, "Arquivo nÃ£o encontrado.")
+    raise HTTPException(404, "Arquivo nÃƒÂ£o encontrado.")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2190,7 +2193,7 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
         _stats["analises_hoje"] = 0
 
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
-        raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")
+        raise HTTPException(429, f"Limite diÃ¡rio de {LIMITE_DIARIO} anÃ¡lises atingido. Tente novamente amanhÃ£.")
 
     arquivos_raw: list[tuple[str, bytes]] = []
     for arq in arquivos:
@@ -2243,3 +2246,6 @@ async def analisar(http_request: Request, request: AnalisarRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
