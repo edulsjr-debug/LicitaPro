@@ -58,17 +58,17 @@ O sistema usa múltiplos provedores com fallback automático:
 | OpenRouter | Gemma, Llama, Nemotron | Gratuito |
 | Groq | llama-3.3-70b-versatile | Gratuito |
 
-- Editais pequenos (até ~15 mil caracteres) → provedores **gratuitos**
-- Editais grandes → **OpenAI** como prioridade (melhor qualidade)
+- Editais pequenos (até ~15 mil caracteres) -> provedores **gratuitos**
+- Editais grandes -> **OpenAI** como prioridade (melhor qualidade)
 - Se todos os provedores estiverem ocupados, o sistema informa o tempo de espera
 
 ---
 
 ## Parser local sem API
 
-O LicitaPRO pode tentar extrair campos do edital localmente antes de chamar provedores de IA. Esse modo reduz custo e dependencia externa, mas mantem a API como fallback quando a confianca do parser for baixa.
+O LicitaPRO pode tentar extrair campos do edital localmente antes de chamar provedores de IA. Esse modo reduz custo e dependencia externa, mas mantem a API como fallback quando a confianca do parser é baixa.
 
-Variaveis:
+Variáveis:
 
 ```env
 USAR_PARSER_LOCAL=true
@@ -91,7 +91,7 @@ Detalhes: [`PROPOSTA_SEM_API.md`](PROPOSTA_SEM_API.md)
 
 Quando um PDF vem escaneado ou com pouco texto extraível, o upload tenta OCR automaticamente antes de salvar o texto para análise.
 
-Variaveis:
+Variáveis:
 
 ```env
 OCR_HABILITADO=true
@@ -148,12 +148,14 @@ Acesse: **http://localhost:8000**
 
 ## Ambientes
 
-| Ambiente | URL | Branch |
-|---|---|---|
-| Produção | https://licitapro-0brh.onrender.com | `master` |
-| Teste | https://licitapro-dev.onrender.com | `dev` |
+| Ambiente | URL | Branch | Canal |
+|---|---|---|---|
+| Produção | https://licitapro-0brh.onrender.com | `master` | `production` |
+| Desenvolvimento | https://licitapro-dev.onrender.com | `dev` | `dev` |
 
-Ambos monitorados pelo **UptimeRobot** a cada 5 minutos para evitar hibernação do plano gratuito do Render.
+O blueprint do Render define os dois serviços. Se o workspace do Render ainda não tiver criado o serviço de desenvolvimento, importe o `render.yaml` no app e selecione o branch `dev`.
+
+Ambos podem ser monitorados pelo **UptimeRobot** a cada 5 minutos para evitar hibernação do plano gratuito do Render.
 
 ---
 
@@ -175,9 +177,9 @@ DATABASE_URL=postgresql://postgres:[SENHA]@db.[PROJETO].supabase.co:5432/postgre
 ## Fluxo de desenvolvimento
 
 ```
-dev branch  →  testa em licitapro-dev.onrender.com
+dev branch  ->  testa em licitapro-dev.onrender.com
     ↓  (validado)
-master branch  →  deploy automático em licitapro-0brh.onrender.com
+master branch  ->  deploy automático em licitapro-0brh.onrender.com
 ```
 
 Nunca subir alterações direto no `master` sem testar no `dev` antes.
@@ -192,7 +194,10 @@ Nunca subir alterações direto no `master` sem testar no `dev` antes.
 
 ## Deploy (Render)
 
-O repositório já inclui `render.yaml` configurado.
+O repositório já inclui `render.yaml` configurado com dois serviços:
+
+- `licitapro` em `master` para produção
+- `licitapro-dev` em `dev` para desenvolvimento
 
 **Variáveis de ambiente obrigatórias:**
 
@@ -211,9 +216,9 @@ O repositório já inclui `render.yaml` configurado.
 | `DATABASE_URL` | Connection string do Supabase (PostgreSQL) |
 
 **Passos para novo ambiente:**
-1. Acesse [render.com](https://render.com) → **New → Web Service**
+1. Acesse [render.com](https://render.com) -> **New -> Web Service**
 2. Conecte o repositório `edulsjr-debug/LicitaPro`
-3. Selecione o branch desejado (`master` para produção, `dev` para teste)
+3. Selecione o branch desejado (`master` para produção, `dev` para desenvolvimento)
 4. Preencha as variáveis de ambiente acima
 5. Clique em **Deploy**
 6. Adicione monitor no [UptimeRobot](https://uptimerobot.com) para manter o serviço ativo
