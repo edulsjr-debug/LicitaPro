@@ -199,7 +199,7 @@ def extrair_numero_edital(texto: str) -> str:
     padroes_prioritarios = [
         # sigla curta seguida direto do número: "PE N° 03/2026", "SRP Nº 01/2025"
         re.compile(
-            r"\b((?:pe|cp|tp|cc|rdc|srp|pp|ine)\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{2,4})\b",
+            r"\b((?:pe|cp|tp|cc|rdc|srp|pp|ine)\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,6}[./-]\d{2,4})\b",
             re.IGNORECASE,
         ),
         # modalidade + texto intermediário opcional (srp, eletrônico, etc.) + número
@@ -211,14 +211,19 @@ def extrair_numero_edital(texto: str) -> str:
             r"rdc|dialogo\s+competitivo)"
             r"(?:\s+(?:eletronico|presencial|eletronica|publica|srp|ine))?"
             r"(?:\s+srp)?"
-            r"\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{2,4})\b",
+            r"\s*(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,6}[./-]\d{2,4})\b",
             re.IGNORECASE,
         ),
     ]
     padroes_secundarios = [
         re.compile(
             r"\b((?:edital|processo(?:\s+administrativo)?)\s*"
-            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,4}[./-]\d{4})\b",
+            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,6}[./-]\d{4})\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\b((?:aviso)\s+(?:de\s+)?(?:licitacao|licitação|pregao|pregão)[^\n]{0,40}?"
+            r"(?:n|no|numero|nr)?\s*[.:ºo°-]?\s*\d{1,6}[./-]\d{2,4})\b",
             re.IGNORECASE,
         ),
     ]
@@ -253,7 +258,7 @@ def extrair_orgao(texto: str) -> str:
 
     # busca etiquetas só no cabeçalho (primeiros 5000 chars) para não pegar
     # cláusulas como "Contratante: a) Em caso de atraso..." no corpo do contrato
-    cabecalho = texto[:5000]
+    cabecalho = re.sub(r"\s+", " ", texto[:8000])
     etiquetas = [
         (r"(?:órgão|orgao|unidade\s+compradora|unidade\s+gestora|entidade)\s*[:\-]\s*([^\n]{5,180})", False),
         (r"(?:órgão|orgao)\s+responsável\s*[:\-]\s*([^\n]{5,180})", False),
@@ -334,10 +339,12 @@ def extrair_cnpj(texto: str) -> str:
 
 
 def extrair_modalidade(texto: str) -> str:
-    normalizado = _normalizar(texto[:5000])
+    normalizado = re.sub(r"\s+", " ", _normalizar(texto[:5000]))
     for nome, variantes in MODALIDADES:
         if any(variante in normalizado for variante in variantes):
             return nome
+    if re.search(r"pregao|preg?o", normalizado) and re.search(r"eletronico|eletr?nico", normalizado):
+        return "Preg?o Eletr?nico"
     return NAO_IDENTIFICADO
 
 

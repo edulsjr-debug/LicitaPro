@@ -7,6 +7,8 @@ import re
 import uuid
 import urllib.error
 import urllib.request
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import openai
@@ -15,12 +17,18 @@ import pdfplumber
 import docx
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from parser_edital import analisar_sem_api, gerar_ficha, _is_identificado
+from parser_edital import (
+    analisar_sem_api,
+    gerar_ficha,
+    _is_identificado,
+    calcular_confianca,
+    calcular_score_viabilidade,
+)
 
 try:
     import fitz
@@ -110,6 +118,13 @@ APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
 _OCR_ENGINE = None
 
+# Fallback local (LLM rodando localmente, ex: Ollama ou endpoint OpenAI-compat).
+LOCAL_LLM_ENABLED = os.getenv("LOCAL_LLM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+LOCAL_LLM_PROVIDER = os.getenv("LOCAL_LLM_PROVIDER", "ollama").lower()  # "ollama" | "openai_compat"
+LOCAL_LLM_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434")
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "llama3.1:8b")
+LOCAL_LLM_TIMEOUT_S = float(os.getenv("LOCAL_LLM_TIMEOUT_S", "30"))
+
 _stats = {
     "total_analises": 0,
     "tokens_input_total": 0,
@@ -132,21 +147,26 @@ _CUSTO = {
     "llama-3.3-70b-versatile":                (0.0,   0.0),
 }
 
-_openai = openai.AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
+_openai_api_key = os.getenv("OPENAI_API_KEY") or ""
+_openai = openai.AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key.strip() else None
 _gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-_openrouter = openai.AsyncOpenAI(
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    base_url="https://openrouter.ai/api/v1",
+_openrouter_api_key = os.getenv("OPENROUTER_API_KEY") or ""
+_openrouter = (
+    openai.AsyncOpenAI(api_key=_openrouter_api_key, base_url="https://openrouter.ai/api/v1")
+    if _openrouter_api_key.strip()
+    else None
 )
-_groq = openai.AsyncOpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
+_groq_api_key = os.getenv("GROQ_API_KEY") or ""
+_groq = (
+    openai.AsyncOpenAI(api_key=_groq_api_key, base_url="https://api.groq.com/openai/v1")
+    if _groq_api_key.strip()
+    else None
 )
-_groq2 = openai.AsyncOpenAI(
-    api_key=os.getenv("GROQ_API_KEY2"),
-    base_url="https://api.groq.com/openai/v1",
+_groq2_api_key = os.getenv("GROQ_API_KEY2") or ""
+_groq2 = (
+    openai.AsyncOpenAI(api_key=_groq2_api_key, base_url="https://api.groq.com/openai/v1")
+    if _groq2_api_key.strip()
+    else None
 )
 
 app.add_middleware(
@@ -645,7 +665,7 @@ async function analisarArquivos(){
 function parseExigencias(ficha){
   var exigs=[],lines=(ficha||'').split('\\n');
   for(var i=0;i<lines.length;i++){
-    var m=lines[i].match(/^\[(ok|warn|fail)\]\s*(.+?)(?:\s*[â€”â€“-]+\s*(.*))?$/i);
+    var m=lines[i].match(/^\\[(ok|warn|fail)\\]\\s*(.+?)(?:\\s*[â€”â€“-]+\\s*(.*))?$/i);
     if(m)exigs.push({status:m[1].toLowerCase(),title:m[2].trim(),detail:(m[3]||'').trim()});
   }
   return exigs;
@@ -653,8 +673,8 @@ function parseExigencias(ficha){
 
 function fichaClean(ficha){
   return (ficha||'')
-    .replace(/## Score de Viabilidade[\s\S]*?(?=\\n## |\\n*$)/i,'')
-    .replace(/## AnÃ¡lise de ExigÃªncias[\s\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## Score de Viabilidade[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## AnÃ¡lise de ExigÃªncias[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
     .trim();
 }
 
@@ -752,6 +772,7 @@ initApp();
 class AnalisarRequest(BaseModel):
     texto: str
     num_docs: int = 2
+    modo: str = "auto"  # "auto" | "parser" | "ia"
 
 
 class AnalisarResponse(BaseModel):
@@ -911,11 +932,53 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pass
 
 
+def _texto_de_odt(conteudo: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+            with zf.open("content.xml") as fh:
+                root = ET.fromstring(fh.read())
+    except Exception as e:
+        print(f"[ODT] Erro ao ler arquivo: {e}")
+        return ""
+
+    ns = {
+        "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+    }
+    partes = []
+    for tag in (".//text:h", ".//text:p"):
+        for node in root.findall(tag, ns):
+            trecho = "".join(node.itertext()).strip()
+            if trecho:
+                partes.append(trecho)
+    return "\n".join(partes).strip()
+
+
+def _texto_de_docx(conteudo: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+            with zf.open("word/document.xml") as fh:
+                root = ET.fromstring(fh.read())
+    except Exception as e:
+        print(f"[DOCX] Erro ao ler arquivo: {e}")
+        return ""
+
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    partes = []
+    for node in root.findall(".//w:t", ns):
+        trecho = (node.text or "").strip()
+        if trecho:
+            partes.append(trecho)
+    return "\n".join(partes).strip()
+
+
 def extrair_texto(nome: str, conteudo: bytes) -> str:
     nome_lower = nome.lower()
     if nome_lower.endswith(".pdf"):
         return _extrair_texto_pdf(conteudo)
     if nome_lower.endswith(".docx"):
+        texto_xml = _texto_de_docx(conteudo)
+        if texto_xml.strip():
+            return texto_xml
         doc = docx.Document(io.BytesIO(conteudo))
         return "\n".join(p.text for p in doc.paragraphs)
     if nome_lower.endswith((".xlsx", ".xls")):
@@ -929,10 +992,179 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
                 if linha.strip():
                     linhas.append(linha)
         return "\n".join(linhas)
+    if nome_lower.endswith(".odt"):
+        return _texto_de_odt(conteudo)
     return conteudo.decode("utf-8", errors="replace")
 
 
-# â”€â”€ HistÃ³rico de anÃ¡lises â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def extrair_texto_com_tipo(nome: str, conteudo: bytes) -> tuple[str, str]:
+    nome_lower = nome.lower()
+    if nome_lower.endswith(".pdf"):
+        return "pdf", extrair_texto(nome, conteudo)
+    if nome_lower.endswith(".docx"):
+        return "docx", extrair_texto(nome, conteudo)
+    if nome_lower.endswith((".xlsx", ".xls")):
+        return "planilha", extrair_texto(nome, conteudo)
+    if nome_lower.endswith(".odt"):
+        return "odt", extrair_texto(nome, conteudo)
+    if nome_lower.endswith((".txt", ".md", ".csv")):
+        return "texto", extrair_texto(nome, conteudo)
+    return "outro", extrair_texto(nome, conteudo)
+
+
+def montar_texto_caso_raw(arquivos: list[tuple[str, bytes]]) -> tuple[str, list[dict[str, str]]]:
+    textos = []
+    meta = []
+    for nome, conteudo in arquivos:
+        tipo, texto = extrair_texto_com_tipo(nome, conteudo)
+        texto = (texto or "").strip()
+        meta.append({"arquivo": nome, "tipo": tipo, "chars": str(len(texto))})
+        if texto:
+            textos.append((nome, tipo, texto))
+
+    partes = []
+    for nome, tipo, txt in textos:
+        partes.append(f"=== {nome} [{tipo}] ===\n{txt}")
+    return "\n\n".join(partes), meta
+
+
+def _normalizar_espacos(texto: str) -> str:
+    return re.sub(r"\s+", " ", (texto or "")).strip()
+
+
+def _score_principal(nome: str, tipo: str, texto: str) -> int:
+    n = (nome or "").lower()
+    t = _normalizar_espacos(texto[:25000]).lower()
+
+    score = 0
+    # Tipo do arquivo (preferir texto “narrativo”)
+    if tipo == "pdf":
+        score += 8
+    elif tipo == "docx":
+        score += 7
+    elif tipo == "odt":
+        score += 5
+    elif tipo == "texto":
+        score += 4
+    elif tipo == "planilha":
+        score -= 3
+
+    # Nome do arquivo
+    if "edital" in n:
+        score += 8
+    if "preg" in n or "pe" in n:
+        score += 3
+    if "termo" in n or "tr" in n or "etp" in n:
+        score += 2
+    if "minuta" in n or "contrato" in n:
+        score -= 1
+    if "anexo" in n:
+        score -= 1
+    if "relacao" in n or "itens" in n:
+        score -= 1
+
+    # Sinais de cabeçalho de edital
+    for kw, w in (
+        ("pregão eletrônico", 10),
+        ("pregao eletronico", 10),
+        ("processo", 5),
+        ("uasg", 6),
+        ("contratante", 4),
+        ("objeto", 3),
+        ("valor total da contratação", 6),
+        ("data da sessão pública", 6),
+        ("critério de julgamento", 5),
+        ("criterio de julgamento", 5),
+    ):
+        if kw in t:
+            score += w
+
+    return score
+
+
+def _extrair_cabecalho_hint(texto_principal: str) -> str:
+    """
+    Gera um preâmbulo estruturado (curto) para ajudar o parser em casos compostos.
+    Não substitui o texto bruto; apenas dá pistas com campos nomeados.
+    """
+    t = _normalizar_espacos(texto_principal[:60000])
+    if not t:
+        return ""
+
+    def first(pat: str) -> str:
+        m = re.search(pat, t, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    # Casos comuns em editais federais: "PREGÃO ELETRÔNICO Nº 90009/2026"
+    numero = first(r"\b((?:preg[aã]o\s+eletr[oô]nico|edital|processo(?:\s+administrativo)?)\s*(?:n[ºo°]\s*)?[\.: -]*\s*\d{1,6}[./-]\d{4})\b")
+    orgao = first(r"\b((?:TRIBUNAL REGIONAL DO TRABALHO[^.]{0,140}|CONSELHO REGIONAL DE PSICOLOGIA[^.]{0,140}|PREFEITURA MUNICIPAL[^.]{0,140}|INSTITUTO INTERAMERICANO[^.]{0,160}))\b")
+    valor = first(r"\b(R\$\s*[\d\.]{1,3}(?:\.[\d]{3})*(?:,\d{2})?)\b")
+    data = first(r"\b(\d{2}/\d{2}/\d{4})\b")
+    modalidade = "Pregão Eletrônico" if re.search(r"\bpreg[aã]o\b", t, re.IGNORECASE) and re.search(r"\beletr[oô]nico\b", t, re.IGNORECASE) else ""
+    criterio = first(r"\b((?:menor pre[cç]o(?:\s+global|\s+por\s+item)?|maior desconto|t[eé]cnica e pre[cç]o|melhor t[eé]cnica))\b")
+
+    linhas = ["## FICHA DE LICITAÇÃO (HINT)"]
+    if numero:
+        linhas.append(f"- Número do edital/processo: {numero}")
+    if orgao:
+        linhas.append(f"- Órgão: {orgao}")
+    if modalidade:
+        linhas.append(f"- Modalidade: {modalidade}")
+    if criterio:
+        linhas.append(f"- Critério de julgamento: {criterio}")
+    if valor:
+        linhas.append(f"- Valor estimado total: {valor}")
+    if data:
+        linhas.append(f"- Data de abertura: {data}")
+
+    if len(linhas) == 1:
+        return ""
+    return "\n".join(linhas) + "\n\n"
+
+
+def montar_texto_caso_classificado_raw(arquivos: list[tuple[str, bytes]]) -> tuple[str, list[dict[str, str]]]:
+    """
+    Monta o texto do caso priorizando o arquivo principal (classificado) e
+    adicionando um cabeçalho (hint) com campos nomeados do principal.
+    """
+    itens = []
+    meta = []
+    for nome, conteudo in arquivos:
+        tipo, texto = extrair_texto_com_tipo(nome, conteudo)
+        texto = (texto or "").strip()
+        meta.append({"arquivo": nome, "tipo": tipo, "chars": str(len(texto))})
+        itens.append({"arquivo": nome, "tipo": tipo, "texto": texto})
+
+    if not itens:
+        return "", meta
+
+    # escolhe principal
+    principal = max(itens, key=lambda it: _score_principal(it["arquivo"], it["tipo"], it["texto"]))
+
+    # ordena: principal primeiro, depois os demais por score desc
+    outros = [it for it in itens if it is not principal]
+    outros.sort(key=lambda it: _score_principal(it["arquivo"], it["tipo"], it["texto"]), reverse=True)
+    ordenados = [principal] + outros
+
+    cabecalho = _extrair_cabecalho_hint(principal["texto"])
+    partes = []
+    for it in ordenados:
+        if not it["texto"]:
+            continue
+        partes.append(f"=== {it['arquivo']} [{it['tipo']}] ===\n{it['texto']}")
+
+    return (cabecalho + "\n\n".join(partes)).strip(), meta
+
+
+def montar_texto_caso(arquivos: list[UploadFile]) -> tuple[str, list[dict[str, str]]]:
+    return montar_texto_caso_raw([(a.filename, a.file.read()) for a in arquivos])
+
+
+def montar_texto_caso_classificado(arquivos: list[UploadFile]) -> tuple[str, list[dict[str, str]]]:
+    return montar_texto_caso_classificado_raw([(a.filename, a.file.read()) for a in arquivos])
+
+
+# ── Histórico de análises ────────────────────────────────────────────────────
 HISTORICO_FILE = Path("historico.json")
 _DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -1008,7 +1240,9 @@ def _salvar_historico():
                 conn.commit()
             return
         except Exception as e:
-            logger.exception("Erro ao salvar hist?rico", extra={"request_id": "-"})`r`n    try:
+            logger.exception("Erro ao salvar historico", extra={"request_id": "-"})
+
+    try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -1196,6 +1430,9 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
     provedores = PROVEDORES_PEQUENO if len(texto) <= LIMITE_PEQUENO else PROVEDORES_GRANDE
 
     for cliente, modelo, max_chars in provedores:
+        if cliente is None:
+            ultimo_erro = "provedor sem API key configurada"
+            continue
         if cliente == "gemini":
             try:
                 ficha = await _chamar_gemini_http(texto[:max_chars], num_docs, modelo)
@@ -1291,6 +1528,169 @@ def _registrar_uso_parser_local(confianca: int):
     p["confianca"] = confianca
 
 
+def _http_post_json(url: str, payload: dict, timeout_s: float) -> dict:
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return {"_raw": raw.decode("utf-8", errors="replace")}
+
+
+async def _chamar_llm_local_chat(messages: list[dict], model: str) -> str:
+    if not LOCAL_LLM_ENABLED:
+        raise HTTPException(503, "LLM local desativado.")
+
+    if LOCAL_LLM_PROVIDER == "ollama":
+        url = LOCAL_LLM_BASE_URL.rstrip("/") + "/api/chat"
+        payload = {"model": model, "messages": messages, "stream": False}
+        try:
+            data = await asyncio.to_thread(_http_post_json, url, payload, LOCAL_LLM_TIMEOUT_S)
+        except Exception as e:
+            raise HTTPException(503, f"Falha ao chamar LLM local (Ollama): {e}")
+        content = (
+            (data.get("message") or {}).get("content")
+            or (data.get("response") or "")
+            or ""
+        )
+        return str(content).strip()
+
+    if LOCAL_LLM_PROVIDER == "openai_compat":
+        url = LOCAL_LLM_BASE_URL.rstrip("/") + "/v1/chat/completions"
+        payload = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+        try:
+            data = await asyncio.to_thread(_http_post_json, url, payload, LOCAL_LLM_TIMEOUT_S)
+        except Exception as e:
+            raise HTTPException(503, f"Falha ao chamar LLM local (OpenAI-compat): {e}")
+        choices = data.get("choices") or []
+        if choices:
+            content = (((choices[0] or {}).get("message") or {}).get("content") or "").strip()
+            return content
+        return ""
+
+    raise HTTPException(500, f"LOCAL_LLM_PROVIDER inválido: {LOCAL_LLM_PROVIDER}")
+
+
+def _montar_ficha_a_partir_de_campos(campos: dict) -> str:
+    # Mantém compatibilidade com o restante do app (render e histórico).
+    return gerar_ficha(campos)
+
+
+async def tentar_fallback_llm_local(texto: str, num_docs: int) -> str | None:
+    """
+    Fallback local para extrair campos principais quando o parser falhar.
+    Retorna uma ficha em Markdown ou None.
+    """
+    if not LOCAL_LLM_ENABLED:
+        return None
+
+    system = (
+        "Você é um extrator de informações de editais brasileiros.\n"
+        "Tarefa: extrair os campos principais de um edital (podem existir anexos misturados).\n"
+        "\n"
+        "Regras:\n"
+        "1) Responda APENAS em JSON válido (sem markdown).\n"
+        "2) Para cada campo, inclua também uma evidência curta (trecho literal do texto) que justifique.\n"
+        "3) Se houver conflito (valores unitários vs total), priorize o TOTAL do contrato/contratação.\n"
+        "4) Para datas, priorize a data/hora da sessão pública/abertura de propostas.\n"
+        "\n"
+        "Formato de saída:\n"
+        "{\n"
+        '  \"numero_edital\": \"...\",\n'
+        '  \"orgao\": \"...\",\n'
+        '  \"modalidade\": \"...\",\n'
+        '  \"objeto\": \"...\",\n'
+        '  \"valor\": \"...\",\n'
+        '  \"data_abertura\": \"...\",\n'
+        '  \"criterio_julgamento\": \"...\",\n'
+        '  \"prazo_vigencia\": \"...\",\n'
+        '  \"evidencias\": {\n'
+        '    \"numero_edital\": \"...\",\n'
+        '    \"orgao\": \"...\",\n'
+        '    \"valor\": \"...\",\n'
+        '    \"data_abertura\": \"...\"\n'
+        "  }\n"
+        "}\n"
+        "\n"
+        "Use 'Não identificado' quando não encontrar."
+    )
+    user = (
+        f"Documentos no caso: {num_docs}\n\n"
+        "Texto consolidado do edital (pode conter anexos):\n"
+        + texto[:120000]
+    )
+    content = await _chamar_llm_local_chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        LOCAL_LLM_MODEL,
+    )
+    if not content:
+        return None
+    try:
+        data = json.loads(content)
+    except Exception:
+        # tenta recuperar JSON dentro de texto maior
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+
+    evid = data.get("evidencias") or {}
+
+    def _pick_best_valor(texto_all: str, valor_llm: str) -> str:
+        # tenta puxar o valor total quando houver marcador forte no texto
+        t = texto_all
+        m = re.search(r"(?:valor\\s+total\\s+da\\s+contrata[cç][aã]o|total\\s+da\\s+contrata[cç][aã]o|valor\\s+estimado\\s+total)[^\\n]{0,80}?(R\\$\\s*[\\d\\.]{1,3}(?:\\.[\\d]{3})*(?:,\\d{2})?)", t, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        return valor_llm
+
+    def _pick_best_data(texto_all: str, data_llm: str) -> str:
+        t = texto_all
+        m = re.search(r"(?:data\\s+da\\s+sess[aã]o\\s+p[uú]blica|abertura\\s+da\\s+sess[aã]o|sess[aã]o\\s+p[uú]blica)[^\\n]{0,80}?(\\d{2}/\\d{2}/\\d{4})", t, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        return data_llm
+
+    valor_llm = (data.get("valor") or "").strip() or "Não identificado"
+    data_llm = (data.get("data_abertura") or "").strip() or "Não identificado"
+    valor_corr = _pick_best_valor(texto, valor_llm)
+    data_corr = _pick_best_data(texto, data_llm)
+
+    campos = {
+        "numero_edital": (data.get("numero_edital") or "").strip() or "Não identificado",
+        "orgao": (data.get("orgao") or "").strip() or "Não identificado",
+        "cnpj": "Não identificado",
+        "modalidade": (data.get("modalidade") or "").strip() or "Não identificado",
+        "objeto": (data.get("objeto") or "").strip() or "Não identificado",
+        "valor": valor_corr,
+        "data_abertura": data_corr,
+        "prazo_envio_proposta": "Não identificado",
+        "prazo_vigencia": (data.get("prazo_vigencia") or "").strip() or "Não identificado",
+        "criterio_julgamento": (data.get("criterio_julgamento") or "").strip() or "Não identificado",
+        "documentos_habilitacao": [],
+        "segmento": detectar_segmento((data.get("objeto") or "") + "\n" + texto),
+    }
+    confianca, faltantes = calcular_confianca(campos)
+    campos["confianca"] = confianca
+    campos["faltantes"] = faltantes
+    campos["usar_fallback_api"] = False
+    score, nivel, justificativas = calcular_score_viabilidade(campos)
+    campos["score"] = score
+    campos["nivel"] = nivel
+    campos["justificativas_score"] = justificativas
+    return _montar_ficha_a_partir_de_campos(campos)
+
+
 async def _enriquecer_cnpj(cnpj: str) -> dict | None:
     """Consulta BrasilAPI para obter razÃ£o social oficial do CNPJ. Gratuito, sem auth."""
     cnpj_limpo = re.sub(r"\D", "", cnpj)
@@ -1309,30 +1709,76 @@ async def _enriquecer_cnpj(cnpj: str) -> dict | None:
         return None
 
 
-async def analisar_com_fallback(texto: str, num_docs: int) -> str:
-    if not USAR_PARSER_LOCAL:
+async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -> str:
+    # modo "ia": pula o parser e vai direto para IA
+    if modo == "ia" or not USAR_PARSER_LOCAL:
+        logger.info("Analise por IA (modo=%s)", modo, extra={"request_id": "-"})
         return await chamar_groq(texto, num_docs)
 
     try:
         resultado = analisar_sem_api(texto, min_confianca=PARSER_MIN_CONFIANCA)
-    except Exception as e:
+    except Exception:
         logger.exception("Erro no parser local", extra={"request_id": "-"})
-        if PARSER_FALLBACK_API:
+        if modo != "parser" and PARSER_FALLBACK_API:
             return await chamar_groq(texto, num_docs)
         raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
 
     texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
-    if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API and not texto_longo:
+
+    # modo "parser": retorna o resultado do parser sem nunca chamar IA
+    if modo == "parser":
         logger.info(
-            "ConfianÃ§a baixa (%s%%). Usando fallback por API.",
+            "Analise por parser (confiança=%s%%)",
             resultado.get("confianca", 0),
             extra={"request_id": "-"},
         )
-        return await chamar_groq(texto, num_docs)
+    else:
+        # modo "auto": fallback para IA se confiança baixa
+        if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+            # 1) tenta fallback local (se habilitado) antes de gastar API externa
+            if LOCAL_LLM_ENABLED:
+                try:
+                    ficha_local = await tentar_fallback_llm_local(texto, num_docs)
+                    if ficha_local and ficha_local.startswith("## FICHA"):
+                        logger.info("LLM local usado (sem API externa).", extra={"request_id": "-"})
+                        _stats["total_analises"] += 1
+                        p = _stats["por_provedor"].setdefault(
+                            "llm-local",
+                            {"analises": 0, "tokens": 0, "custo_usd": 0.0},
+                        )
+                        p["analises"] += 1
+                        return ficha_local
+                except HTTPException as e:
+                    logger.info("LLM local indisponivel: %s", e.detail, extra={"request_id": "-"})
+                except Exception as e:
+                    logger.warning("Erro no LLM local: %s", e, extra={"request_id": "-"})
 
-    if resultado.get("usar_fallback_api") and texto_longo:
+            # 2) fallback API (com truncamento quando necessário)
+            if texto_longo:
+                corte = int(PARSER_MAX_CHARS_FALLBACK * 0.60)
+                texto_api = (
+                    texto[:corte]
+                    + "\n\n[...trecho omitido...]\n\n"
+                    + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
+                )
+                logger.info(
+                    "Confiança baixa (%s%%), doc longo (%s chars) — truncado para fallback API.",
+                    resultado.get("confianca", 0),
+                    len(texto),
+                    extra={"request_id": "-"},
+                )
+            else:
+                texto_api = texto
+                logger.info(
+                    "Confiança baixa (%s%%). Usando fallback por API.",
+                    resultado.get("confianca", 0),
+                    extra={"request_id": "-"},
+                )
+            return await chamar_groq(texto_api, num_docs)
+
+    if resultado.get("usar_fallback_api") and texto_longo and (modo == "parser" or not PARSER_FALLBACK_API):
         logger.info(
-            "Documento longo demais para fallback automÃ¡tico; mantendo saÃ­da do parser local para evitar timeout.",
+            "Documento longo demais para fallback automático; mantendo saída do parser local.",
             extra={"request_id": "-"},
         )
     # enriquecimento: BrasilAPI CNPJ â†’ razÃ£o social oficial
@@ -1537,7 +1983,7 @@ async def root():
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
-async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...)):
+async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
     _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
@@ -1550,28 +1996,39 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
         raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")
 
-    textos = []
+    arquivos_raw: list[tuple[str, bytes]] = []
     for arq in arquivos:
-        conteudo = await arq.read()
         try:
-            texto = extrair_texto(arq.filename, conteudo)
+            conteudo = await arq.read()
         except Exception as e:
             _audit("analisar_arquivo_read_error", request.state.request_id, arquivo=arq.filename, erro=str(e))
-            raise HTTPException(400, "Erro ao ler " + arq.filename + ": " + str(e))
-        textos.append((arq.filename, texto))
+            raise HTTPException(400, f"Erro ao ler '{arq.filename}': {e}")
+        arquivos_raw.append((arq.filename, conteudo))
 
-    cota = MAX_CHARS // len(textos)
-    partes = []
-    for nome, txt in textos:
-        if len(txt) <= cota:
-            trecho = txt
-        else:
-            inicio = int(cota * 0.60)
-            fim    = cota - inicio
-            trecho = txt[:inicio] + "\n\n[...]\n\n" + txt[-fim:]
-        partes.append(f"=== {nome} ===\n{trecho}")
-    texto_completo = "\n\n".join(partes)
-    ficha = await analisar_com_fallback(texto_completo, len(arquivos))
+    try:
+        texto_completo, meta_arquivos = montar_texto_caso_classificado_raw(arquivos_raw)
+    except Exception as e:
+        _audit("analisar_arquivo_process_error", request.state.request_id, erro=str(e))
+        raise HTTPException(400, f"Erro ao processar arquivos enviados: {e}")
+
+    if len(texto_completo) > MAX_CHARS:
+        cota = MAX_CHARS // max(1, len(meta_arquivos))
+        partes = []
+        for nome, conteudo in arquivos_raw:
+            try:
+                _, texto = extrair_texto_com_tipo(nome, conteudo)
+            except Exception as e:
+                raise HTTPException(400, f"Erro ao ler '{nome}': {e}")
+            texto = texto or ""
+            if len(texto) <= cota:
+                trecho = texto
+            else:
+                inicio = int(cota * 0.60)
+                fim = cota - inicio
+                trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
+            partes.append(f"=== {nome} ===\n{trecho}")
+        texto_completo = "\n\n".join(partes)
+    ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
     _stats["analises_hoje"] += 1
     registrar_analise(ficha)
     _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
@@ -1581,7 +2038,7 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
 @app.post("/analisar", response_model=AnalisarResponse)
 async def analisar(http_request: Request, request: AnalisarRequest):
     _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
-    ficha = await analisar_com_fallback(request.texto, request.num_docs)
+    ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
     registrar_analise(ficha)
     _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     return AnalisarResponse(ficha=ficha)
