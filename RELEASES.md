@@ -16,3 +16,9 @@
 - HistÃ³rico agora carrega metadados dos anexos e expÃµe download do arquivo original por rota.
 - Interface de detalhe passou a mostrar os anexos preservados junto da ficha.
 
+
+## v2026.05.04
+- Persistência migrada para a API do Supabase via SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY / SUPABASE_SECRET_KEY.
+- Upload dos arquivos originais agora vai para Supabase Storage e o histórico guarda apenas metadados + caminho do objeto.
+- DATABASE_URL ficou como fallback legado.
+
