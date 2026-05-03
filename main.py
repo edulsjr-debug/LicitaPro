@@ -472,22 +472,22 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 <aside class="sidebar">
   <div class="sidebar-logo">Licita<span>Pro</span></div>
   <nav class="sidebar-nav">
-    <button type="button" class="nav-item" id="nav-editais" data-page="editais">
+    <a class="nav-item" id="nav-editais" href="/editais" data-page="editais">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Editais
-    </button>
-    <button type="button" class="nav-item" id="nav-upload" data-page="upload">
+    </a>
+    <a class="nav-item" id="nav-upload" href="/upload" data-page="upload">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
       Novo edital
-    </button>
-    <button type="button" class="nav-item" id="nav-historico" data-page="historico">
+    </a>
+    <a class="nav-item" id="nav-historico" href="/historico-view" data-page="historico">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       Histórico
-    </button>
-    <button type="button" class="nav-item" id="nav-logs" data-page="logs">
+    </a>
+    <a class="nav-item" id="nav-logs" href="/logs" data-page="logs">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h16"/></svg>
       Logs
-    </button>
+    </a>
     <a class="nav-item" href="/status">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       Status
@@ -576,7 +576,7 @@ function renderEditaisPage(mc){
     var labels={todos:'Todos',alta:'Viabilidade alta',media:'MÃ©dia',baixa:'Baixa'};
     return `<button type="button" class="filter-pill${_filter===f?' active':''}" data-filter="${f}">${labels[f]}</button>`;
   }).join('');
-  var emptyBtn=_historico.length===0?`<button type="button" class="btn btn-primary" style="margin-top:16px" data-page="upload">Analisar primeiro edital</button>`:'';
+  var emptyBtn=_historico.length===0?`<a class="btn btn-primary" style="margin-top:16px" href="/upload">Analisar primeiro edital</a>`:'';
   var cards=filtered.length===0?
     `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
     filtered.map(editalCardHTML).join('');
@@ -2448,7 +2448,8 @@ async def root():
         .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
     )
     response = HTMLResponse(html)
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     return response
 
 
