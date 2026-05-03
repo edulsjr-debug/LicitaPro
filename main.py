@@ -1,4 +1,5 @@
 import asyncio
+import html as _html
 import io
 import hashlib
 import json
@@ -100,6 +101,118 @@ def _audit(event: str, request_id: str = "-", **fields):
         if value is not None:
             payload[key] = value
     logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), extra={"request_id": request_id})
+
+
+def _shell_html(initial_page: str, main_html: str) -> str:
+    html = (
+        HTML_PAGE
+        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
+        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace('<div class="main-content" id="main-content"></div>', f'<div class="main-content" id="main-content">{main_html}</div>')
+    )
+    if initial_page:
+        html = html.replace("</head>", f'<script>window.__INITIAL_PAGE__="{initial_page}";</script></head>', 1)
+    return html
+
+
+def _server_editais_html() -> str:
+    hoje = datetime.date.today().isoformat()
+    total = len(_historico)
+    altos = sum(1 for r in _historico if (r.get("score") or 0) >= 75)
+    itens = _historico[:5]
+    cards = "".join(
+        f'<div class="stat-card" style="padding:16px 18px"><div style="font-size:13px;font-weight:600">{_html.escape(r.get("objeto") or "Análise de edital")}</div><div style="font-size:12px;color:var(--fg-3);margin-top:4px">{_html.escape(r.get("orgao") or "Órgão não identificado")} · {r.get("score") or "—"}%</div></div>'
+        for r in itens
+    ) or '<div class="empty-state"><div class="empty-title">Nenhum edital analisado ainda</div><div class="empty-sub">Envie um edital em Novo edital.</div></div>'
+    return f"""
+    <div class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Workspace</div>
+          <h1 class="page-title">Editais analisados</h1>
+          <p class="page-sub">{total} edital(is) no histórico · hoje: {hoje}</p>
+        </div>
+        <a class="btn btn-primary" href="/upload">Novo edital</a>
+      </div>
+      <div class="stats-grid g4">
+        <div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">{"0" if total == 0 else total} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">reseta à meia-noite</div></div>
+        <div class="stat-card"><div class="lbl">Total salvo</div><div class="val">{total}</div><div class="sub">análises no histórico</div></div>
+        <div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">{altos}</div><div class="sub">de {total} editais</div></div>
+        <div class="stat-card"><div class="lbl">Página</div><div class="val" style="font-size:18px">Editais</div><div class="sub">navegação server-side</div></div>
+      </div>
+      <div class="edital-list">{cards}</div>
+    </div>
+    """
+
+
+def _server_upload_html() -> str:
+    return """
+    <div class="page">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Novo edital</h1>
+          <p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p>
+        </div>
+      </div>
+      <div class="dropzone" id="dropzone">
+        <div class="dz-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+        </div>
+        <div class="dz-title">Arraste o edital ou clique para enviar</div>
+        <div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div>
+      </div>
+      <div class="file-list" id="file-list"></div>
+      <button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none">Analisar edital</button>
+    </div>
+    """
+
+
+def _server_historico_html() -> str:
+    by_day = {}
+    for r in _historico:
+        d = (r.get("timestamp") or "").split("T")[0]
+        if d:
+            by_day.setdefault(d, []).append(r)
+    rows = "".join(
+        f"<tr><td>{_html.escape(d)}</td><td>{len(items)}</td><td>{sum(len(x.get('arquivos') or []) for x in items)}</td><td>{sum((x.get('score') or 0) for x in items) // max(1, len(items))}</td></tr>"
+        for d, items in sorted(by_day.items(), reverse=True)
+    ) or '<tr><td colspan="4">Nenhuma análise ainda.</td></tr>'
+    return f"""
+    <div class="page">
+      <div class="page-header">
+        <div><h1 class="page-title">Histórico de uso</h1><p class="page-sub">Todas as análises agrupadas por dia</p></div>
+        <a class="btn btn-secondary" href="/editais">Editais</a>
+      </div>
+      <div class="stats-grid g3">
+        <div class="stat-card"><div class="lbl">Total de análises</div><div class="val">{len(_historico)}</div><div class="sub">no histórico</div></div>
+        <div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">{len(by_day)}</div><div class="sub">dias distintos</div></div>
+        <div class="stat-card"><div class="lbl">Página</div><div class="val" style="font-size:18px">Histórico</div><div class="sub">navegação server-side</div></div>
+      </div>
+      <div class="hist-table">
+        <table>
+          <thead><tr><th>Dia</th><th>Análises</th><th>Arquivos</th><th>Score médio</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def _server_logs_html() -> str:
+    log_lines = _ler_ultimas_linhas(LOG_FILE, 60)
+    err_lines = _ler_ultimas_linhas(ERROR_LOG_FILE, 30)
+    body = "\n".join(log_lines + (["", "--- erros ---"] if err_lines else []) + err_lines) or "Nenhum log disponivel."
+    return f"""
+    <div class="page">
+      <div class="page-header">
+        <div><div class="page-eyebrow">Sistema</div><h1 class="page-title">Logs</h1><p class="page-sub">Últimas linhas do log centralizado do app</p></div>
+        <a class="btn btn-secondary" href="/editais">Editais</a>
+      </div>
+      <div class="stat-card" style="padding:18px">
+        <pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--ink-50);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:70vh">{_html.escape(body)}</pre>
+      </div>
+    </div>
+    """
 
 app = FastAPI(title="Proxy LicitaÃ§Ã£o")
 
@@ -832,11 +945,18 @@ function renderLogsPage(mc){
 }
 
 async function initApp(){
-  await loadHistorico();
   var page=(window.__INITIAL_PAGE__ || (location.hash||'#editais').slice(1));
   if(!page)page='editais';
   if(page==='detalhe')page='editais';
   showPage(page);
+  try{
+    await loadHistorico();
+    if(location.hash==='#editais' || page==='editais' || page==='historico' || page==='logs'){
+      showPage(page);
+    }
+  }catch(e){
+    console.error('Erro ao carregar histórico na inicialização:', e);
+  }
 }
 window.showPage = showPage;
 window.setFilter = setFilter;
@@ -2442,12 +2562,7 @@ async def recent_logs(limit: int = 100):
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    html = (
-        HTML_PAGE
-        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
-        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
-        .replace("</head>", '<script>window.__INITIAL_PAGE__="editais";</script></head>', 1)
-    )
+    html = _shell_html("editais", _server_editais_html())
     response = HTMLResponse(html)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -2456,18 +2571,15 @@ async def root():
 
 @app.get("/editais")
 async def redirect_editais():
-    return await root()
+    response = HTMLResponse(_shell_html("editais", _server_editais_html()))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/upload")
 async def redirect_upload():
-    html = (
-        HTML_PAGE
-        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
-        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
-        .replace("</head>", '<script>window.__INITIAL_PAGE__="upload";</script></head>', 1)
-    )
-    response = HTMLResponse(html)
+    response = HTMLResponse(_shell_html("upload", _server_upload_html()))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
@@ -2475,13 +2587,7 @@ async def redirect_upload():
 
 @app.get("/historico-view")
 async def redirect_historico_view():
-    html = (
-        HTML_PAGE
-        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
-        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
-        .replace("</head>", '<script>window.__INITIAL_PAGE__="historico";</script></head>', 1)
-    )
-    response = HTMLResponse(html)
+    response = HTMLResponse(_shell_html("historico", _server_historico_html()))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
@@ -2489,13 +2595,7 @@ async def redirect_historico_view():
 
 @app.get("/logs")
 async def redirect_logs():
-    html = (
-        HTML_PAGE
-        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
-        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
-        .replace("</head>", '<script>window.__INITIAL_PAGE__="logs";</script></head>', 1)
-    )
-    response = HTMLResponse(html)
+    response = HTMLResponse(_shell_html("logs", _server_logs_html()))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
