@@ -484,6 +484,10 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       HistÃƒÂ³rico
     </button>
+    <button class="nav-item" id="nav-logs" onclick="showPage('logs')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h16"/></svg>
+      Logs
+    </button>
     <a class="nav-item" href="/status">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       Status
@@ -548,6 +552,7 @@ function showPage(page,data){
   else if(page==='upload')renderUploadPage(mc);
   else if(page==='detalhe')renderDetalhePage(mc,data);
   else if(page==='historico')renderHistoricoPage(mc);
+  else if(page==='logs')renderLogsPage(mc);
 }
 
 function renderEditaisPage(mc){
@@ -794,6 +799,29 @@ async function loadHistorico(){
     if(qv)qv.textContent=hoje+' / 20';
     if(qf)qf.style.width=Math.min(100,(hoje/20)*100)+'%';
   }catch(e){console.error('Erro ao carregar histÃƒÂ³rico:',e)}
+}
+
+async function loadLogs(limit){
+  var res=await fetch('/api/logs/recent?limit='+(limit||120));
+  if(!res.ok)throw new Error('Falha ao carregar logs');
+  return await res.json();
+}
+
+function renderLogsPage(mc){
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Sistema</div><h1 class="page-title">Logs</h1><p class="page-sub">Últimas linhas do log centralizado do app</p></div><button class="btn btn-secondary" onclick="showPage('editais')">← Editais</button></div><div class="stats-grid g3" style="margin-bottom:20px"><div class="stat-card"><div class="lbl">Arquivo log</div><div class="val" style="font-size:18px">logs/licitapro.log</div><div class="sub">eventos do sistema</div></div><div class="stat-card"><div class="lbl">Arquivo erro</div><div class="val" style="font-size:18px">logs/licitapro.error.log</div><div class="sub">warnings e falhas</div></div><div class="stat-card"><div class="lbl">Fonte</div><div class="val" style="font-size:18px">/api/logs/recent</div><div class="sub">consulta local e no dev</div></div></div><div class="stat-card" style="padding:0"><div style="padding:16px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font-size:14px;font-weight:700">Últimos eventos</div><div style="font-size:12px;color:var(--fg-3)">Atualize após rodar uma análise</div></div><button class="btn btn-secondary btn-sm" id="btn-refresh-logs">Atualizar</button></div><div id="logs-box" style="padding:16px 18px"><div style="font-size:13px;color:var(--fg-3)">Carregando logs...</div></div></div></div>`;
+  var box=mc.querySelector('#logs-box');
+  var btn=mc.querySelector('#btn-refresh-logs');
+  async function refresh(){
+    try{
+      var data=await loadLogs(120);
+      var lines=(data.log||[]).concat((data.errors||[]).length?['','--- erros ---']:[]).concat(data.errors||[]);
+      box.innerHTML=lines.length?'<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--ink-50);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:70vh">'+escHtml(lines.join('\n'))+'</pre>':'<div class="empty-state"><div class="empty-title">Nenhum log disponível</div></div>';
+    }catch(e){
+      box.innerHTML='<div class="empty-state"><div class="empty-title">Erro ao carregar logs</div><div class="empty-sub">'+escHtml(e.message)+'</div></div>';
+    }
+  }
+  btn.onclick=refresh;
+  refresh();
 }
 
 async function initApp(){await loadHistorico();showPage('editais')}
