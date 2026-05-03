@@ -543,6 +543,9 @@ function toast(msg,dur){
 function escHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
 function showPage(page,data){
+  if(page && location.hash !== '#'+page && page !== 'detalhe'){
+    try{history.replaceState(null,'', '#'+page);}catch(e){}
+  }
   _filter=page==='editais'?_filter:'todos';
   document.querySelectorAll('.nav-item').forEach(function(el){el.classList.remove('active')});
   var nav=document.getElementById('nav-'+page);
@@ -824,7 +827,19 @@ function renderLogsPage(mc){
   refresh();
 }
 
-async function initApp(){await loadHistorico();showPage('editais')}
+async function initApp(){
+  await loadHistorico();
+  var page=(location.hash||'#editais').slice(1);
+  if(!page)page='editais';
+  if(page==='detalhe')page='editais';
+  showPage(page);
+}
+window.addEventListener('hashchange', function(){
+  var page=(location.hash||'#editais').slice(1);
+  if(!page)page='editais';
+  if(page==='detalhe')page='editais';
+  showPage(page);
+});
 initApp();
 </script>
 </body>
@@ -2172,7 +2187,7 @@ async def status():
     deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "nÃƒÂ£o informado"
     data_reset = _stats["hoje"]
 
-    return f"""<!DOCTYPE html>
+    response = HTMLResponse(f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2270,7 +2285,9 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 </main>
 <script>setTimeout(()=>location.reload(),30000);</script>
 </body>
-</html>"""
+</html>""")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.post("/importar/arquivo")
@@ -2393,11 +2410,14 @@ async def recent_logs(limit: int = 100):
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    return (
+    html = (
         HTML_PAGE
         .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
         .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
     )
+    response = HTMLResponse(html)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
