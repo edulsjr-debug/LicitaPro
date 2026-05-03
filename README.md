@@ -284,6 +284,7 @@ O repositório já inclui `render.yaml` configurado.
 | GET | `/historico` | Lista todo o histórico |
 | GET | `/historico/{id}` | Retorna ficha de uma análise |
 | GET | `/historico/{id}/arquivos/{arquivo_id}` | Baixa o arquivo original preservado |
+| GET | `/api/logs/recent` | Retorna as últimas linhas do log local e de erros |
 | POST | `/importar/arquivo` | Importa fichas prontas via arquivo |
 | POST | `/importar/texto` | Importa ficha via texto colado |
 | POST | `/api/reclassificar` | Reclassifica segmentos do histórico |
