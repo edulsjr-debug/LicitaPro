@@ -747,7 +747,7 @@ function addFiles(files,autoStart){
   for(var i=0;i<files.length;i++)_selectedFiles.push(files[i]);
   renderFileList();
   if(autoStart!==false){
-    setTimeout(function(){if(!_processing)analisarArquivos();},0);
+    if(!_processing)analisarArquivos();
   }
 }
 function removeFile(i){_selectedFiles.splice(i,1);renderFileList()}
