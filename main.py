@@ -3,6 +3,7 @@ import io
 import hashlib
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
 import re
@@ -51,11 +52,6 @@ except Exception:
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s",
-)
-
 
 class _RequestIdFilter(logging.Filter):
     def filter(self, record):
@@ -64,9 +60,37 @@ class _RequestIdFilter(logging.Filter):
         return True
 
 
-for _handler in logging.getLogger().handlers:
-    _handler.addFilter(_RequestIdFilter())
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "licitapro.log"
+ERROR_LOG_FILE = LOG_DIR / "licitapro.error.log"
 
+
+def _configure_logging():
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s")
+
+    stream = logging.StreamHandler()
+    stream.setFormatter(fmt)
+    stream.addFilter(_RequestIdFilter())
+    root.addHandler(stream)
+
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    file_handler.addFilter(_RequestIdFilter())
+    root.addHandler(file_handler)
+
+    error_handler = RotatingFileHandler(ERROR_LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    error_handler.setLevel(logging.WARNING)
+    error_handler.setFormatter(fmt)
+    error_handler.addFilter(_RequestIdFilter())
+    root.addHandler(error_handler)
+
+
+_configure_logging()
 logger = logging.getLogger("licitapro")
 
 
@@ -1624,6 +1648,16 @@ def _contar_registros_db() -> dict:
         return {"db_configured": True, "historico_rows": None, "arquivo_rows": None, "db_error": str(exc)}
 
 
+def _ler_ultimas_linhas(arquivo: Path, limite: int = 100) -> list[str]:
+    if not arquivo.exists():
+        return []
+    try:
+        linhas = arquivo.read_text(encoding="utf-8", errors="replace").splitlines()
+        return linhas[-limite:]
+    except Exception:
+        return []
+
+
 def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto"):
     analise_id = uuid.uuid4().hex[:10]
     anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
@@ -2318,6 +2352,15 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
 @app.get("/api/storage-check")
 async def storage_check():
     return _contar_registros_db()
+
+
+@app.get("/api/logs/recent")
+async def recent_logs(limit: int = 100):
+    limit = max(1, min(500, limit))
+    return {
+        "log": _ler_ultimas_linhas(LOG_FILE, limit),
+        "errors": _ler_ultimas_linhas(ERROR_LOG_FILE, limit),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
