@@ -945,7 +945,7 @@ function renderLogsPage(mc){
     try{
       var data=await loadLogs(120);
       var lines=(data.log||[]).concat((data.errors||[]).length?['','--- erros ---']:[]).concat(data.errors||[]);
-      box.innerHTML=lines.length?'<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--ink-50);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:70vh">'+escHtml(lines.join('\n'))+'</pre>':'<div class="empty-state"><div class="empty-title">Nenhum log disponvel</div></div>';
+      box.innerHTML=lines.length?'<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--ink-50);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:70vh">'+escHtml(lines.join('\\n'))+'</pre>':'<div class="empty-state"><div class="empty-title">Nenhum log disponvel</div></div>';
     }catch(e){
       box.innerHTML='<div class="empty-state"><div class="empty-title">Erro ao carregar logs</div><div class="empty-sub">'+escHtml(e.message)+'</div></div>';
     }
