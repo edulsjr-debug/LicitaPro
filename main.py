@@ -787,19 +787,24 @@ async function analisarArquivos(){
     var allPdfs=_selectedFiles.every(function(f){return f.name.toLowerCase().endsWith('.pdf')});
     var resp;
     if(allPdfs&&typeof pdfjsLib!=='undefined'){
-      var partes=[];
-      for(var i=0;i<_selectedFiles.length;i++){
-        var txt=await extractPdfText(_selectedFiles[i]);
-        if(!txt||txt.trim().length<100){allPdfs=false;break;}
-        var NL2=String.fromCharCode(10);
-        partes.push('=== '+_selectedFiles[i].name+' ==='+NL2+txt);
-      }
-      if(allPdfs){
-        var sep=String.fromCharCode(10)+String.fromCharCode(10);
-        var textoCompleto=partes.join(sep);
-        var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length})});
-        if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
-        resp=await res.json();
+      try{
+        var partes=[];
+        for(var i=0;i<_selectedFiles.length;i++){
+          var txt=await extractPdfText(_selectedFiles[i]);
+          if(!txt||txt.trim().length<100){allPdfs=false;break;}
+          var NL2=String.fromCharCode(10);
+          partes.push('=== '+_selectedFiles[i].name+' ==='+NL2+txt);
+        }
+        if(allPdfs){
+          var sep=String.fromCharCode(10)+String.fromCharCode(10);
+          var textoCompleto=partes.join(sep);
+          var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length})});
+          if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
+          resp=await res.json();
+        }
+      }catch(extractErr){
+        allPdfs=false;
+        console.warn('Falha na extração local, usando upload para o servidor:', extractErr);
       }
     }
     if(!resp){
@@ -972,6 +977,33 @@ window.renderHistoricoPage = renderHistoricoPage;
 window.renderUploadPage = renderUploadPage;
 window.renderEditaisPage = renderEditaisPage;
 window.navigateTo = navigateTo;
+window.addEventListener('error', function(ev){
+  try{
+    fetch('/api/client-error', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message: ev.message || 'javascript error',
+        stack: ev.error && ev.error.stack ? ev.error.stack : '',
+        url: ev.filename || '',
+        line: ev.lineno || null,
+        col: ev.colno || null
+      })
+    });
+  }catch(e){}
+});
+window.addEventListener('unhandledrejection', function(ev){
+  try{
+    fetch('/api/client-error', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message: 'unhandledrejection: ' + (ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason || 'unknown')),
+        stack: ev.reason && ev.reason.stack ? ev.reason.stack : ''
+      })
+    });
+  }catch(e){}
+});
 document.addEventListener('click', function(e){
   var nav=e.target.closest('[data-page]');
   if(nav){
@@ -2563,6 +2595,25 @@ async def recent_logs(limit: int = 100):
         "log": _ler_ultimas_linhas(LOG_FILE, limit),
         "errors": _ler_ultimas_linhas(ERROR_LOG_FILE, limit),
     }
+
+
+@app.post("/api/client-error")
+async def client_error(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    msg = str(data.get("message") or data.get("error") or "client error")
+    stack = str(data.get("stack") or "")
+    url = str(data.get("url") or "")
+    line = data.get("line")
+    col = data.get("col")
+    logger.error(
+        "ClientError %s",
+        json.dumps({"message": msg, "stack": stack, "url": url, "line": line, "col": col}, ensure_ascii=False),
+        extra={"request_id": "-"},
+    )
+    return {"ok": True}
 
 
 @app.get("/", response_class=HTMLResponse)
