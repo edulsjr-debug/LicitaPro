@@ -731,11 +731,11 @@ function renderUploadPage(mc){
   var dz=document.getElementById('dropzone');
   dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
   dz.ondragleave=function(){dz.classList.remove('over')};
-  dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files)};
+  dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files,true)};
   var btn=document.getElementById('btn-analisar');
   btn.onclick=analisarArquivos;
   renderFileList();
-  document.getElementById('file-input').onchange=function(){addFiles(this.files);this.value=''};
+  document.getElementById('file-input').onchange=function(){addFiles(this.files,true);this.value=''};
 }
 
 function handleDrop(e){
@@ -743,7 +743,13 @@ function handleDrop(e){
   document.getElementById('dropzone').classList.remove('over');
   addFiles(e.dataTransfer.files);
 }
-function addFiles(files){for(var i=0;i<files.length;i++)_selectedFiles.push(files[i]);renderFileList()}
+function addFiles(files,autoStart){
+  for(var i=0;i<files.length;i++)_selectedFiles.push(files[i]);
+  renderFileList();
+  if(autoStart!==false){
+    setTimeout(function(){if(!_processing)analisarArquivos();},0);
+  }
+}
 function removeFile(i){_selectedFiles.splice(i,1);renderFileList()}
 function renderFileList(){
   var fl=document.getElementById('file-list'),btn=document.getElementById('btn-analisar');
