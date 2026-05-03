@@ -1353,19 +1353,67 @@ def _extrair_cabecalho_hint(texto_principal: str) -> str:
     Gera um preâmbulo estruturado (curto) para ajudar o parser em casos compostos.
     Não substitui o texto bruto; apenas dá pistas com campos nomeados.
     """
-    t = _normalizar_espacos(texto_principal[:60000])
-    if not t:
+    raw = (texto_principal or "")[:60000]
+    if not raw.strip():
         return ""
 
-    def first(pat: str) -> str:
-        m = re.search(pat, t, re.IGNORECASE)
+    lines = [ln.strip() for ln in raw.splitlines()]
+    t = _normalizar_espacos(raw)
+
+    def first(pat: str, texto: Optional[str] = None) -> str:
+        alvo = texto if texto is not None else raw
+        m = re.search(pat, alvo, re.IGNORECASE | re.MULTILINE)
         return m.group(1).strip() if m else ""
+
+    def find_after(labels: list[str], pat: str, max_ahead: int = 6) -> str:
+        for i, ln in enumerate(lines):
+            n = _normalizar_espacos(ln).lower()
+            if any(lbl in n for lbl in labels):
+                janela = _normalizar_espacos("\n".join(lines[i:i + max_ahead + 1]))
+                m = re.search(pat, janela, re.IGNORECASE | re.MULTILINE)
+                if m:
+                    return m.group(1).strip()
+        return ""
+
+    def first_meaningful_after(labels: list[str], max_ahead: int = 6) -> str:
+        for i, ln in enumerate(lines):
+            n = _normalizar_espacos(ln).lower()
+            if any(lbl in n for lbl in labels):
+                for j in range(i + 1, min(len(lines), i + max_ahead + 1)):
+                    cand = _normalizar_espacos(lines[j])
+                    if not cand:
+                        continue
+                    if len(cand) < 4:
+                        continue
+                    if re.fullmatch(r"[\W_]+", cand):
+                        continue
+                    if re.fullmatch(r"\(?\s*uasg\s*\)?", cand, re.IGNORECASE):
+                        continue
+                    if cand.lower() in {"contratante", "objeto", "valor", "crit?rio de julgamento", "criterio de julgamento"}:
+                        continue
+                    return cand
+        return ""
 
     # Casos comuns em editais federais: "PREGÃO ELETRÔNICO Nº 90009/2026"
     numero = first(r"\b((?:preg[aã]o\s+eletr[oô]nico|edital|processo(?:\s+administrativo)?)\s*(?:n[ºo°]\s*)?[\.: -]*\s*\d{1,6}[./-]\d{4})\b")
-    orgao = first(r"\b((?:TRIBUNAL REGIONAL DO TRABALHO[^.]{0,140}|CONSELHO REGIONAL DE PSICOLOGIA[^.]{0,140}|PREFEITURA MUNICIPAL[^.]{0,140}|INSTITUTO INTERAMERICANO[^.]{0,160}))\b")
-    valor = first(r"\b(R\$\s*[\d\.]{1,3}(?:\.[\d]{3})*(?:,\d{2})?)\b")
-    data = first(r"\b(\d{2}/\d{2}/\d{4})\b")
+    orgao = first_meaningful_after(["contratante", "órgão", "orgão", "uasg"])
+    if not orgao:
+        orgao = find_after(
+            ["contratante", "órgão", "orgão", "uasg"],
+            r"((?:TRIBUNAL REGIONAL DO TRABALHO|CONSELHO REGIONAL DE PSICOLOGIA|PREFEITURA MUNICIPAL|INSTITUTO INTERAMERICANO)[^\n]{0,180})",
+        )
+    if orgao:
+        orgao = re.split(r"\b(?:OBJETO|VALOR|CRIT[ÉE]RIO|DATA)\b", orgao, maxsplit=1, flags=re.IGNORECASE)[0].strip(" -:()")
+    valor = (
+        find_after(["valor total da contratação", "total da contratação", "valor total"], r"(R\$\s*[\d\.]+(?:,\d{2})?)")
+        or find_after(["valor estimado"], r"(R\$\s*[\d\.]+(?:,\d{2})?)")
+        or find_after(["valor máximo", "valor maximo"], r"(R\$\s*[\d\.]+(?:,\d{2})?)")
+        or first(r"\b(R\$\s*[\d\.]+(?:,\d{2})?)\b")
+    )
+    data = (
+        find_after(["data da sessão pública", "data da sessao publica", "abertura das propostas", "data de abertura"], r"(\d{2}/\d{2}/\d{4})")
+        or first(r"\b(\d{2}/\d{2}/\d{4})\b")
+    )
     modalidade = "Pregão Eletrônico" if re.search(r"\bpreg[aã]o\b", t, re.IGNORECASE) and re.search(r"\beletr[oô]nico\b", t, re.IGNORECASE) else ""
     criterio = first(r"\b((?:menor pre[cç]o(?:\s+global|\s+por\s+item)?|maior desconto|t[eé]cnica e pre[cç]o|melhor t[eé]cnica))\b")
 
@@ -1405,7 +1453,12 @@ def montar_texto_caso_classificado_raw(arquivos: list[tuple[str, bytes]]) -> tup
         return "", meta
 
     # escolhe principal
-    principal = max(itens, key=lambda it: _score_principal(it["arquivo"], it["tipo"], it["texto"]))
+    candidatos_principais = [
+        it for it in itens
+        if "edital" in (it["arquivo"] or "").lower() or "edital" in _normalizar_espacos(it["texto"][:5000]).lower()
+    ]
+    pool = candidatos_principais or itens
+    principal = max(pool, key=lambda it: _score_principal(it["arquivo"], it["tipo"], it["texto"]))
 
     # ordena: principal primeiro, depois os demais por score desc
     outros = [it for it in itens if it is not principal]
