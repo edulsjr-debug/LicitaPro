@@ -833,7 +833,7 @@ function renderLogsPage(mc){
 
 async function initApp(){
   await loadHistorico();
-  var page=(location.hash||'#editais').slice(1);
+  var page=(window.__INITIAL_PAGE__ || (location.hash||'#editais').slice(1));
   if(!page)page='editais';
   if(page==='detalhe')page='editais';
   showPage(page);
@@ -2446,6 +2446,7 @@ async def root():
         HTML_PAGE
         .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
         .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace("</head>", '<script>window.__INITIAL_PAGE__="editais";</script></head>', 1)
     )
     response = HTMLResponse(html)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -2455,22 +2456,49 @@ async def root():
 
 @app.get("/editais")
 async def redirect_editais():
-    return RedirectResponse("/#editais", status_code=307)
+    return await root()
 
 
 @app.get("/upload")
 async def redirect_upload():
-    return RedirectResponse("/#upload", status_code=307)
+    html = (
+        HTML_PAGE
+        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
+        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace("</head>", '<script>window.__INITIAL_PAGE__="upload";</script></head>', 1)
+    )
+    response = HTMLResponse(html)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/historico-view")
 async def redirect_historico_view():
-    return RedirectResponse("/#historico", status_code=307)
+    html = (
+        HTML_PAGE
+        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
+        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace("</head>", '<script>window.__INITIAL_PAGE__="historico";</script></head>', 1)
+    )
+    response = HTMLResponse(html)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/logs")
 async def redirect_logs():
-    return RedirectResponse("/#logs", status_code=307)
+    html = (
+        HTML_PAGE
+        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
+        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace("</head>", '<script>window.__INITIAL_PAGE__="logs";</script></head>', 1)
+    )
+    response = HTMLResponse(html)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
