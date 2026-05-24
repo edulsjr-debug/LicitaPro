@@ -2933,6 +2933,18 @@ async def redirect_logs():
     return response
 
 
+# Job queue para análises longas — sobrevive a qualquer timeout de proxy
+_jobs: dict[str, dict] = {}
+_JOB_TTL = 3600.0  # descarta jobs com mais de 1h
+
+
+def _limpar_jobs_expirados():
+    agora = time.monotonic()
+    expirados = [k for k, v in _jobs.items() if agora - v.get("_ts", 0) > _JOB_TTL]
+    for k in expirados:
+        del _jobs[k]
+
+
 @app.post("/analisar/arquivo")
 async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
     if not arquivos:
@@ -2946,7 +2958,6 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
         raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")
 
-    # Leitura dos bytes (rápida — só lê o upload já em memória)
     arquivos_raw: list[tuple[str, bytes]] = []
     for arq in arquivos:
         try:
@@ -2956,88 +2967,53 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             raise HTTPException(400, f"Erro ao ler '{arq.filename}': {e}")
         arquivos_raw.append((arq.filename, conteudo))
 
+    job_id = uuid.uuid4().hex[:16]
     request_id = request.state.request_id
     num_arquivos = len(arquivos)
-    _audit("analisar_arquivo_start", request_id, arquivos=num_arquivos)
+    _jobs[job_id] = {"status": "pending", "_ts": time.monotonic()}
+    _limpar_jobs_expirados()
+    _audit("analisar_arquivo_start", request_id, arquivos=num_arquivos, job_id=job_id)
 
-    async def stream_com_keepalive():
+    async def _processar():
         loop = asyncio.get_event_loop()
-
-        # Keepalive imediato — resposta começa a fluir antes de qualquer extração de PDF
-        yield b"\n"
-
-        # Extração de texto (bloqueante: pdfplumber/docx/xlsx) — roda em thread pool
         try:
             texto_completo, meta_arquivos = await loop.run_in_executor(
                 None, montar_texto_caso_classificado_raw, arquivos_raw
             )
-        except Exception as e:
-            logger.exception("Erro ao processar arquivos", extra={"request_id": request_id})
-            yield json.dumps({"error": f"Erro ao processar arquivos: {e}"}, ensure_ascii=False).encode() + b"\n"
-            return
-
-        yield b"\n"  # keepalive após extração
-
-        # Truncagem se necessário (também bloqueante)
-        if len(texto_completo) > MAX_CHARS:
-            def _truncar():
-                cota = MAX_CHARS // max(1, len(meta_arquivos))
-                partes = []
-                for nome, conteudo in arquivos_raw:
-                    try:
+            if len(texto_completo) > MAX_CHARS:
+                def _truncar():
+                    cota = MAX_CHARS // max(1, len(meta_arquivos))
+                    partes = []
+                    for nome, conteudo in arquivos_raw:
                         _, texto = extrair_texto_com_tipo(nome, conteudo)
-                    except Exception as exc:
-                        raise RuntimeError(f"Erro ao ler '{nome}': {exc}")
-                    texto = texto or ""
-                    if len(texto) <= cota:
-                        trecho = texto
-                    else:
+                        texto = texto or ""
                         inicio = int(cota * 0.60)
                         fim = cota - inicio
-                        trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
-                    partes.append(f"=== {nome} ===\n{trecho}")
-                return "\n\n".join(partes), meta_arquivos
-
-            try:
+                        trecho = texto if len(texto) <= cota else texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
+                        partes.append(f"=== {nome} ===\n{trecho}")
+                    return "\n\n".join(partes), meta_arquivos
                 texto_completo, meta_arquivos = await loop.run_in_executor(None, _truncar)
-            except Exception as e:
-                yield json.dumps({"error": str(e)}, ensure_ascii=False).encode() + b"\n"
-                return
 
-            yield b"\n"  # keepalive após truncagem
+            ficha = await analisar_com_fallback(texto_completo, num_arquivos, modo=modo)
+            _stats["analises_hoje"] += 1
+            meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
+            _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))
+            _jobs[job_id] = {"status": "done", "ficha": ficha, **meta, "_ts": time.monotonic()}
+        except Exception as e:
+            detail = getattr(e, "detail", str(e))
+            logger.error("Job %s falhou: %s", job_id, detail, extra={"request_id": request_id})
+            _jobs[job_id] = {"status": "error", "error": detail, "_ts": time.monotonic()}
 
-        # Análise IA (potencialmente longa — keepalives a cada 10s)
-        task = asyncio.create_task(analisar_com_fallback(texto_completo, num_arquivos, modo=modo))
-        while not task.done():
-            yield b"\n"
-            try:
-                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
-            except asyncio.TimeoutError:
-                pass
-            except Exception:
-                pass
+    asyncio.create_task(_processar())
+    return {"job_id": job_id, "status": "pending"}
 
-        if task.cancelled() or task.exception() is not None:
-            exc = task.exception() if not task.cancelled() else None
-            detail = getattr(exc, "detail", str(exc)) if exc else "Análise cancelada."
-            logger.error("Falha na análise: %s", detail, extra={"request_id": request_id})
-            yield json.dumps({"error": detail}, ensure_ascii=False).encode() + b"\n"
-            return
 
-        ficha = task.result()
-        _stats["analises_hoje"] += 1
-        meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
-        _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))
-        yield json.dumps({"ficha": ficha, **meta}, ensure_ascii=False).encode() + b"\n"
-
-    return StreamingResponse(
-        stream_com_keepalive(),
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "X-Accel-Buffering": "no",
-            "Cache-Control": "no-cache",
-        },
-    )
+@app.get("/analisar/job/{job_id}")
+async def get_job(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job não encontrado ou expirado.")
+    return {k: v for k, v in job.items() if not k.startswith("_")}
 
 
 @app.post("/analisar", response_model=AnalisarResponse)

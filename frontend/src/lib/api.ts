@@ -26,25 +26,27 @@ export async function analisarArquivos(
   const form = new FormData()
   arquivos.forEach((f) => form.append('arquivos', f))
   form.append('modo', modo)
+
+  // POST retorna job_id imediatamente — sem timeout possível
   const res = await fetch(`${BASE}/analisar/arquivo`, { method: 'POST', body: form })
   if (!res.ok) {
     const err = await res.text().catch(() => res.statusText)
     throw new Error(err || `HTTP ${res.status}`)
   }
-  // Streaming response: backend sends \n keepalives, last line is the JSON result
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: !done })
+  const { job_id } = await res.json() as { job_id: string }
+
+  // Polling a cada 3s até o job terminar (até 10 minutos)
+  const MAX_MS = 10 * 60 * 1000
+  const start = Date.now()
+  while (Date.now() - start < MAX_MS) {
+    await new Promise((r) => setTimeout(r, 3000))
+    const poll = await fetch(`${BASE}/analisar/job/${job_id}`)
+    if (!poll.ok) continue
+    const job = await poll.json() as { status: string; error?: string } & AnalisarResponse
+    if (job.status === 'done') return job
+    if (job.status === 'error') throw new Error(job.error ?? 'Erro na análise.')
   }
-  const lastLine = buffer.split('\n').map((l) => l.trim()).filter(Boolean).at(-1) ?? ''
-  if (!lastLine) throw new Error('Resposta vazia do servidor.')
-  const parsed = JSON.parse(lastLine) as AnalisarResponse & { error?: string }
-  if (parsed.error) throw new Error(parsed.error)
-  return parsed
+  throw new Error('Análise demorou mais de 10 minutos. Tente com menos arquivos.')
 }
 
 export async function analisarTexto(
