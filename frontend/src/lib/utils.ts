@@ -17,11 +17,14 @@ export function extrairSegmento(ficha: string): string {
   return iaMatch ? iaMatch[1].replace(/\*/g, '').trim() : 'Outros'
 }
 
+const TZ = 'America/Sao_Paulo'
+
 export function formatarData(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
 
   return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TZ,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -58,25 +61,35 @@ export function extrairJustificativas(ficha: string): string[] {
     .filter(Boolean)
 }
 
+function dateSP(iso: string): string {
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .format(new Date(iso))
+    .split('/')
+    .reverse()
+    .join('-')
+}
+
 export function horaCurta(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(date)
+  return new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }).format(date)
 }
 
 export function diaGrupo(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso || 'Sem data'
 
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(today.getDate() - 1)
-
-  const key = date.toISOString().slice(0, 10)
-  if (key === today.toISOString().slice(0, 10)) return 'Hoje'
-  if (key === yesterday.toISOString().slice(0, 10)) return 'Ontem'
+  const key = dateSP(iso)
+  if (key === dateSP(new Date().toISOString())) return 'Hoje'
+  if (key === dateSP(new Date(Date.now() - 86_400_000).toISOString())) return 'Ontem'
 
   return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TZ,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
