@@ -43,6 +43,7 @@ export interface StatsResponse {
   por_provedor: Record<string, { analises: number; tokens_in: number; tokens_out: number; custo: number }>
   versao: string
   commit: string
+  db_ok?: boolean
 }
 
 export type Modo = 'auto' | 'parser' | 'ia'

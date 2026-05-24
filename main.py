@@ -2653,6 +2653,20 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
     raise HTTPException(404, "Arquivo nÃ£o encontrado.")
 
 
+def _check_db_ok() -> bool:
+    try:
+        if _usa_supabase_api():
+            _supabase_request("/rest/v1/historico?select=id&limit=1", method="GET")
+            return True
+        if _DATABASE_URL:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+            return True
+        return len(_historico) > 0
+    except Exception:
+        return False
+
 @app.get("/stats")
 async def get_stats():
     scores = [r.get("score", 0) for r in _historico if r.get("score")]
@@ -2664,6 +2678,7 @@ async def get_stats():
         "versao": APP_VERSION_LABEL,
         "commit": APP_COMMIT_LABEL,
         "limite_diario": LIMITE_DIARIO,
+        "db_ok": _check_db_ok(),
     }
 
 

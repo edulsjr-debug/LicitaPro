@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { getStats } from '@/lib/api'
+import { Tooltip } from './Tooltip'
 
 type IconName = 'list' | 'plus' | 'clock' | 'terminal'
 
@@ -15,6 +16,16 @@ const navItems: { href: string; label: string; icon: IconName }[] = [
   { href: '/logs', label: 'Logs', icon: 'terminal' },
 ]
 
+const FRONT_COMMIT =
+  process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local'
+
+type ServiceStatus = {
+  backOk: boolean | null
+  dbOk: boolean | null
+  versao: string | null
+  commit: string | null
+}
+
 function Icon({ name }: { name: IconName }) {
   if (name === 'plus') {
     return (
@@ -23,7 +34,6 @@ function Icon({ name }: { name: IconName }) {
       </svg>
     )
   }
-
   if (name === 'clock') {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
@@ -32,7 +42,6 @@ function Icon({ name }: { name: IconName }) {
       </svg>
     )
   }
-
   if (name === 'terminal') {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
@@ -40,11 +49,56 @@ function Icon({ name }: { name: IconName }) {
       </svg>
     )
   }
-
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
       <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
+  )
+}
+
+function StatusLed({ ok, label }: { ok: boolean | null; label: string }) {
+  const dot = (
+    <span
+      className={clsx(
+        'inline-block h-2 w-2 rounded-full transition-colors',
+        ok === null ? 'bg-gray-300' : ok ? 'bg-green-500' : 'bg-red-500'
+      )}
+    />
+  )
+  return (
+    <Tooltip
+      content={
+        <span>
+          {label}:{' '}
+          {ok === null ? 'verificando…' : ok ? 'online' : 'offline'}
+        </span>
+      }
+    >
+      {dot}
+    </Tooltip>
+  )
+}
+
+function SidebarFooter({ status }: { status: ServiceStatus }) {
+  return (
+    <div className="border-t border-gray-100 px-4 py-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <StatusLed ok={true} label="Frontend" />
+          <StatusLed ok={status.backOk} label="Backend" />
+          <StatusLed ok={status.dbOk} label="Banco" />
+        </div>
+        <LogoutButton />
+      </div>
+      <div className="space-y-0.5">
+        <p className="font-mono text-[10px] text-gray-400">
+          back {status.versao ?? '—'} · {status.commit ?? '—'}
+        </p>
+        <p className="font-mono text-[10px] text-gray-400">
+          front {FRONT_COMMIT}
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -100,17 +154,29 @@ function LogoutButton({ className }: { className?: string }) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [version, setVersion] = useState<string | null>(null)
+  const [status, setStatus] = useState<ServiceStatus>({
+    backOk: null,
+    dbOk: null,
+    versao: null,
+    commit: null,
+  })
 
   useEffect(() => {
     let mounted = true
 
     getStats()
-      .then((stats) => {
-        if (mounted) setVersion(stats.versao || stats.commit || null)
+      .then((s) => {
+        if (mounted)
+          setStatus({
+            backOk: true,
+            dbOk: s.db_ok ?? null,
+            versao: s.versao ?? null,
+            commit: s.commit ?? null,
+          })
       })
       .catch(() => {
-        if (mounted) setVersion(null)
+        if (mounted)
+          setStatus({ backOk: false, dbOk: false, versao: null, commit: null })
       })
 
     return () => {
@@ -133,12 +199,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3">
-          <span className="text-xs text-gray-400">
-            {version ? `API ${version}` : 'API indisponivel'}
-          </span>
-          <LogoutButton />
-        </div>
+        <SidebarFooter status={status} />
       </aside>
 
       <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur md:hidden">
@@ -146,7 +207,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="text-base font-semibold text-gray-950">
             Licita<span className="text-brand-600">PRO</span>
           </Link>
-          <LogoutButton />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <StatusLed ok={true} label="Frontend" />
+              <StatusLed ok={status.backOk} label="Backend" />
+              <StatusLed ok={status.dbOk} label="Banco" />
+            </div>
+            <LogoutButton />
+          </div>
         </div>
       </header>
 
