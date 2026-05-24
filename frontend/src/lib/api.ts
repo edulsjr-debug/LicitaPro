@@ -5,17 +5,27 @@ import type {
   Modo,
   StatsResponse,
 } from './types'
+import { recordError } from './errorStore'
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!BASE) throw new Error('NEXT_PUBLIC_API_URL não configurada — verifique as variáveis de ambiente da Vercel.')
-  const res = await fetch(`${BASE}${path}`, init)
-  if (!res.ok) {
-    const err = await res.text().catch(() => res.statusText)
-    throw new Error(err || `HTTP ${res.status}`)
+  const url = `${BASE}${path}`
+  const method = init?.method ?? 'GET'
+  try {
+    const res = await fetch(url, init)
+    if (!res.ok) {
+      const err = await res.text().catch(() => res.statusText)
+      const msg = err || `HTTP ${res.status}`
+      recordError(url, method, msg, res.status)
+      throw new Error(msg)
+    }
+    return res.json() as Promise<T>
+  } catch (e) {
+    if (e instanceof TypeError) recordError(url, method, e)
+    throw e
   }
-  return res.json() as Promise<T>
 }
 
 export async function analisarArquivos(
@@ -28,10 +38,19 @@ export async function analisarArquivos(
   form.append('modo', modo)
 
   // POST retorna job_id imediatamente — sem timeout possível
-  const res = await fetch(`${BASE}/analisar/arquivo`, { method: 'POST', body: form })
+  const uploadUrl = `${BASE}/analisar/arquivo`
+  let res: Response
+  try {
+    res = await fetch(uploadUrl, { method: 'POST', body: form })
+  } catch (e) {
+    recordError(uploadUrl, 'POST', e)
+    throw e
+  }
   if (!res.ok) {
     const err = await res.text().catch(() => res.statusText)
-    throw new Error(err || `HTTP ${res.status}`)
+    const msg = err || `HTTP ${res.status}`
+    recordError(uploadUrl, 'POST', msg, res.status)
+    throw new Error(msg)
   }
   const { job_id } = await res.json() as { job_id: string }
 
@@ -40,11 +59,21 @@ export async function analisarArquivos(
   const start = Date.now()
   while (Date.now() - start < MAX_MS) {
     await new Promise((r) => setTimeout(r, 3000))
-    const poll = await fetch(`${BASE}/analisar/job/${job_id}`)
-    if (!poll.ok) continue
-    const job = await poll.json() as { status: string; error?: string } & AnalisarResponse
-    if (job.status === 'done') return job
-    if (job.status === 'error') throw new Error(job.error ?? 'Erro na análise.')
+    const pollUrl = `${BASE}/analisar/job/${job_id}`
+    try {
+      const poll = await fetch(pollUrl)
+      if (!poll.ok) { recordError(pollUrl, 'GET', `HTTP ${poll.status}`, poll.status); continue }
+      const job = await poll.json() as { status: string; error?: string } & AnalisarResponse
+      if (job.status === 'done') return job
+      if (job.status === 'error') {
+        const msg = job.error ?? 'Erro na análise.'
+        recordError(pollUrl, 'GET', msg)
+        throw new Error(msg)
+      }
+    } catch (e) {
+      if (e instanceof TypeError) recordError(pollUrl, 'GET', e)
+      throw e
+    }
   }
   throw new Error('Análise demorou mais de 10 minutos. Tente com menos arquivos.')
 }
