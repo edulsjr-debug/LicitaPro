@@ -151,7 +151,7 @@ export default function NovoPage() {
           ref={inputRef}
           type="file"
           multiple
-          accept=".pdf,.docx,.xlsx,.xls,.txt"
+          accept=".pdf,.doc,.docx,.xlsx,.xls,.txt,.odt"
           className="hidden"
           onChange={(event) => {
             addFiles(event.target.files)

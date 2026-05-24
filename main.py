@@ -1245,6 +1245,26 @@ def _texto_de_docx(conteudo: bytes) -> str:
     return "\n".join(partes).strip()
 
 
+def _texto_de_doc(conteudo: bytes) -> str:
+    """Extrai texto de .doc (Word binário OLE) via heurística UTF-16 LE + fallback ASCII."""
+    # .doc armazena texto em UTF-16 LE intercalado com bytes de controle
+    try:
+        texto = conteudo.decode("utf-16-le", errors="ignore")
+        linhas = []
+        for linha in texto.replace("\r", "\n").split("\n"):
+            limpa = "".join(c for c in linha if c.isprintable() or c == "\t")
+            if len(limpa.strip()) > 5:
+                linhas.append(limpa.strip())
+        resultado = "\n".join(linhas)
+        if len(resultado) > 200:
+            return resultado
+    except Exception:
+        pass
+    # Fallback: extrai runs de ASCII imprimível
+    chunks = re.findall(rb"[ -~\n\r\t]{15,}", conteudo)
+    return "\n".join(c.decode("ascii", errors="ignore").strip() for c in chunks if c.strip())
+
+
 def extrair_texto(nome: str, conteudo: bytes) -> str:
     nome_lower = nome.lower()
     if nome_lower.endswith(".pdf"):
@@ -1255,6 +1275,8 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
             return texto_xml
         doc = docx.Document(io.BytesIO(conteudo))
         return "\n".join(p.text for p in doc.paragraphs)
+    if nome_lower.endswith(".doc"):
+        return _texto_de_doc(conteudo)
     if nome_lower.endswith((".xlsx", ".xls")):
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True)
         linhas = []
@@ -1277,6 +1299,8 @@ def extrair_texto_com_tipo(nome: str, conteudo: bytes) -> tuple[str, str]:
         return "pdf", extrair_texto(nome, conteudo)
     if nome_lower.endswith(".docx"):
         return "docx", extrair_texto(nome, conteudo)
+    if nome_lower.endswith(".doc"):
+        return "doc", extrair_texto(nome, conteudo)
     if nome_lower.endswith((".xlsx", ".xls")):
         return "planilha", extrair_texto(nome, conteudo)
     if nome_lower.endswith(".odt"):
