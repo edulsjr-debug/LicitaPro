@@ -1695,20 +1695,13 @@ def _salvar_historico():
         try:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
-                    ids_atuais = []
                     for item in _historico:
-                        ids_atuais.append(item.get("id"))
                         item_db = {k: v for k, v in item.items() if k != "arquivos"}
                         cur.execute("""
                             INSERT INTO historico (id, dados)
                             VALUES (%s, %s::jsonb)
                             ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados
                         """, (item.get("id"), json.dumps(item_db, ensure_ascii=False)))
-                    if ids_atuais:
-                        cur.execute("DELETE FROM historico WHERE NOT (id = ANY(%s::text[]))", (ids_atuais,))
-                    else:
-                        cur.execute("DELETE FROM historico_arquivos")
-                        cur.execute("DELETE FROM historico")
                 conn.commit()
             return
         except Exception as e:
@@ -1799,22 +1792,6 @@ def _eh_ficha(texto: str) -> bool:
         "PRAZO DE PAGAMENTO", "CONTATO DO", "ABERTURA",
     ]
     return sum(1 for c in campos_tipicos if c in t) >= 3
-
-def registrar_analise(ficha: str):
-    registro = {
-        "id":        uuid.uuid4().hex[:10],
-        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        “orgao”:     _extrair_orgao_ficha(ficha),
-        “valor”:     extrair_campo(ficha, “Valor Estimado Total”),
-        “objeto”:    extrair_objeto(ficha),
-        “segmento”:  detectar_segmento(ficha),
-        “score”:     extrair_score(ficha),
-        “ficha”:     ficha,
-    }
-    _historico.insert(0, registro)
-    if len(_historico) > 500:
-        _historico.pop()
-    _salvar_historico()
 
 def _reclassificar_historico():
     mudou = False
@@ -2617,7 +2594,18 @@ async def get_historico():
 async def get_ficha_historico(id: str):
     for r in _historico:
         if r["id"] == id:
-            return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score"), "arquivos": r.get("arquivos", []), "fonte": r.get("fonte")}
+            return {
+                "id":        r.get("id"),
+                "timestamp": r.get("timestamp"),
+                "orgao":     r.get("orgao"),
+                "objeto":    r.get("objeto"),
+                "valor":     r.get("valor"),
+                "segmento":  r.get("segmento"),
+                "score":     r.get("score"),
+                "ficha":     r.get("ficha"),
+                "arquivos":  r.get("arquivos", []),
+                "fonte":     r.get("fonte"),
+            }
     raise HTTPException(404, "Análise não encontrada.")
 
 
