@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
 import re
+import time
 import uuid
 import urllib.error
 import urllib.request
@@ -1047,6 +1048,9 @@ class AnalisarRequest(BaseModel):
 
 class AnalisarResponse(BaseModel):
     ficha: str
+    id: Optional[str] = None
+    persistido: Optional[bool] = None
+    aviso: Optional[str] = None
 
 
 def _obter_ocr_engine():
@@ -1677,7 +1681,8 @@ def _migrar_se_necessario():
 
 _migrar_se_necessario()
 
-def _salvar_historico():
+def _salvar_historico() -> bool:
+    """Saves history; returns True if at least one backend succeeded."""
     if _usa_supabase_api():
         try:
             for item in _historico:
@@ -1688,7 +1693,7 @@ def _salvar_historico():
                     body=payload,
                     extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
                 )
-            return
+            return True
         except Exception:
             logger.exception("Erro ao salvar historico via Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
@@ -1703,16 +1708,18 @@ def _salvar_historico():
                             ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados
                         """, (item.get("id"), json.dumps(item_db, ensure_ascii=False)))
                 conn.commit()
-            return
-        except Exception as e:
+            return True
+        except Exception:
             logger.exception("Erro ao salvar historico", extra={"request_id": "-"})
 
     try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        return True
     except Exception:
         pass
+    return False
 
 _SEGMENTOS = [
     ("Saúde",                    ["saude", "medic", "hospital", "medicament", "ubs", "enfermagem", "farmac", "ambulatorial"]),
@@ -1944,7 +1951,7 @@ def _ler_ultimas_linhas(arquivo: Path, limite: int = 100) -> list[str]:
         return []
 
 
-def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto"):
+def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto") -> dict:
     analise_id = uuid.uuid4().hex[:10]
     anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
     registro = {
@@ -1962,7 +1969,9 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
     _historico.insert(0, registro)
     if len(_historico) > 500:
         _historico.pop()
-    _salvar_historico()
+    persistido = _salvar_historico()
+    aviso = None if persistido else "Análise gerada mas não foi possível salvar no histórico. Verifique a conexão com o banco."
+    return {"id": analise_id, "persistido": persistido, "aviso": aviso}
 
 
 MAX_CHARS = 400_000
@@ -2658,19 +2667,40 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
     raise HTTPException(404, "Arquivo nÃ£o encontrado.")
 
 
+_db_ok_cache: tuple[bool, float] | None = None
+_DB_OK_TTL = 60.0
+
 def _check_db_ok() -> bool:
+    global _db_ok_cache
+    now = time.monotonic()
+    if _db_ok_cache is not None and now - _db_ok_cache[1] < _DB_OK_TTL:
+        return _db_ok_cache[0]
     try:
         if _usa_supabase_api():
             _supabase_request("/rest/v1/historico?select=id&limit=1", method="GET")
-            return True
-        if _DATABASE_URL:
+            result = True
+        elif _DATABASE_URL:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
-            return True
-        return len(_historico) > 0
+            result = True
+        else:
+            result = len(_historico) > 0
     except Exception:
-        return False
+        result = False
+    _db_ok_cache = (result, now)
+    return result
+
+@app.get("/health")
+async def health():
+    ia_ok = bool(_gemini_api_key or _openai_api_key or _groq_api_key)
+    return {
+        "api": "ok",
+        "db": "ok" if _check_db_ok() else "error",
+        "ia": "configured" if ia_ok else "missing",
+        "version": APP_VERSION_LABEL,
+        "commit": APP_COMMIT_LABEL,
+    }
 
 @app.get("/stats")
 async def get_stats():
@@ -2809,18 +2839,18 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
         texto_completo = "\n\n".join(partes)
     ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
     _stats["analises_hoje"] += 1
-    registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
+    meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
     _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
-    return AnalisarResponse(ficha=ficha)
+    return AnalisarResponse(ficha=ficha, **meta)
 
 
 @app.post("/analisar", response_model=AnalisarResponse)
 async def analisar(http_request: Request, request: AnalisarRequest):
     _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
-    registrar_analise(ficha)
+    meta = registrar_analise(ficha)
     _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
-    return AnalisarResponse(ficha=ficha)
+    return AnalisarResponse(ficha=ficha, **meta)
 
 
 if __name__ == "__main__":

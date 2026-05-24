@@ -23,6 +23,7 @@ export default function NovoPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ficha, setFicha] = useState<string | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   function addFiles(fileList: FileList | null) {
@@ -53,6 +54,8 @@ export default function NovoPage() {
     try {
       const response = await analisarArquivos(files, modo)
       setFicha(response.ficha)
+      setAviso(response.aviso ?? null)
+      setError(null)
 
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         const score = extrairScore(response.ficha)
@@ -90,6 +93,7 @@ export default function NovoPage() {
             onClick={() => {
               setFicha(null)
               setCopied(false)
+              setAviso(null)
             }}
             className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
           >
@@ -104,6 +108,12 @@ export default function NovoPage() {
             {copied ? 'Copiado' : 'Copiar ficha'}
           </button>
         </div>
+
+        {aviso ? (
+          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            {aviso}
+          </div>
+        ) : null}
 
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <ScoreBadge score={extrairScore(ficha)} breakdown={extrairJustificativas(ficha)} />

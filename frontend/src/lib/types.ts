@@ -25,6 +25,9 @@ export interface HistoricoArquivo {
 
 export interface AnalisarResponse {
   ficha: string
+  id?: string
+  persistido?: boolean
+  aviso?: string
 }
 
 export interface HistoricoListResponse {
@@ -40,7 +43,7 @@ export interface StatsResponse {
   historico_n?: number
   limite_diario?: number
   analises_hoje: number
-  por_provedor: Record<string, { analises: number; tokens_in: number; tokens_out: number; custo: number }>
+  por_provedor: Record<string, { analises: number; tokens: number; custo_usd: number }>
   versao: string
   commit: string
   db_ok?: boolean

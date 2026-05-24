@@ -6,9 +6,10 @@ import type {
   StatsResponse,
 } from './types'
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!BASE) throw new Error('NEXT_PUBLIC_API_URL não configurada — verifique as variáveis de ambiente da Vercel.')
   const res = await fetch(`${BASE}${path}`, init)
   if (!res.ok) {
     const err = await res.text().catch(() => res.statusText)
