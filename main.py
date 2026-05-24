@@ -1768,6 +1768,35 @@ def _migrar_se_necessario():
 _migrar_se_necessario()
 
 
+def _auto_migrar_logs():
+    """Cria a tabela logs automaticamente no startup via psycopg2 ou Supabase REST."""
+    _DDL = """
+        CREATE TABLE IF NOT EXISTS public.logs (
+            id        bigserial primary key,
+            criado_em timestamptz not null default now(),
+            nivel     text        not null,
+            mensagem  text        not null,
+            request_id text
+        );
+        CREATE INDEX IF NOT EXISTS logs_criado_em_idx ON public.logs (criado_em DESC);
+    """
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    for stmt in _DDL.strip().split(";"):
+                        stmt = stmt.strip()
+                        if stmt:
+                            cur.execute(stmt)
+                conn.commit()
+            logger.info("Tabela logs verificada/criada.", extra={"request_id": "-"})
+        except Exception:
+            logger.exception("Não foi possível criar tabela logs via psycopg2.", extra={"request_id": "-"})
+
+
+_auto_migrar_logs()
+
+
 def _carregar_logs_supabase():
     """Carrega logs recentes do Supabase para o buffer em memória no boot."""
     global _error_buffer
