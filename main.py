@@ -15,7 +15,6 @@ import docx
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -122,11 +121,14 @@ _groq2 = openai.AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
 )
 
+_FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[_FRONTEND_URL, "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 SYSTEM_PROMPT = """Você é um especialista em licitações públicas brasileiras.
@@ -1341,8 +1343,22 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
     return resultado["ficha"]
 
 
-@app.get("/status", response_class=HTMLResponse)
+@app.get("/status")
 async def status():
+    return {
+        "ok": True,
+        "versao": APP_VERSION_LABEL,
+        "commit": APP_COMMIT_LABEL,
+        "deploy": APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else None,
+        "analises_hoje": _stats["analises_hoje"],
+        "total_analises": _stats["total_analises"],
+        "historico_n": len(_historico),
+        "limite_diario": LIMITE_DIARIO,
+        "data_reset": _stats["hoje"],
+    }
+
+@app.get("/_html_status_legacy")
+async def _html_status_legacy():
     total   = _stats["total_analises"]
     hoje    = _stats["analises_hoje"]
     hist_n  = len(_historico)
@@ -1502,17 +1518,36 @@ async def get_historico():
 async def get_ficha_historico(id: str):
     for r in _historico:
         if r["id"] == id:
-            return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score")}
+            return {
+                "id": r["id"],
+                "timestamp": r.get("timestamp"),
+                "orgao": r.get("orgao"),
+                "valor": r.get("valor"),
+                "objeto": r.get("objeto"),
+                "segmento": r.get("segmento"),
+                "score": r.get("score"),
+                "ficha": r.get("ficha"),
+            }
     raise HTTPException(404, "Análise não encontrada.")
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/stats")
+async def get_stats():
+    scores = [r.get("score", 0) for r in _historico if r.get("score")]
+    score_medio = round(sum(scores) / len(scores)) if scores else 0
+    return {
+        **_stats,
+        "historico_n": len(_historico),
+        "score_medio": score_medio,
+        "versao": APP_VERSION_LABEL,
+        "commit": APP_COMMIT_LABEL,
+        "limite_diario": LIMITE_DIARIO,
+    }
+
+
+@app.get("/")
 async def root():
-    return (
-        HTML_PAGE
-        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
-        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
-    )
+    return {"app": "LicitaPRO API", "versao": APP_VERSION_LABEL, "frontend": _FRONTEND_URL}
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)

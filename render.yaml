@@ -25,6 +25,10 @@ services:
         sync: false
       - key: APP_DEPLOYED_AT
         sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
 
   - type: web
     name: licitapro-dev
