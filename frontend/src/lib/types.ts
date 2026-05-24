@@ -6,10 +6,21 @@ export interface HistoricoItem {
   objeto: string
   segmento: string
   score: number
+  arquivos?: HistoricoArquivo[]
 }
 
 export interface HistoricoDetalhe extends HistoricoItem {
   ficha: string
+  fonte?: string
+}
+
+export interface HistoricoArquivo {
+  id: string
+  arquivo?: string
+  nome_original?: string
+  mime_type?: string
+  tamanho_bytes?: number
+  ordem?: number
 }
 
 export interface AnalisarResponse {
@@ -25,6 +36,9 @@ export interface StatsResponse {
   tokens_input_total: number
   tokens_output_total: number
   custo_usd_total: number
+  score_medio?: number
+  historico_n?: number
+  limite_diario?: number
   analises_hoje: number
   por_provedor: Record<string, { analises: number; tokens_in: number; tokens_out: number; custo: number }>
   versao: string
