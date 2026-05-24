@@ -1,12 +1,21 @@
 import asyncio
+import html as _html
 import io
+import hashlib
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import os
+import mimetypes
 import re
 import uuid
 import urllib.error
 import urllib.request
+import zipfile
+import xml.etree.ElementTree as ET
+from urllib.parse import quote
 from pathlib import Path
+from typing import Optional
 
 import openai
 import openpyxl
@@ -14,11 +23,18 @@ import pdfplumber
 import docx
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from parser_edital import analisar_sem_api, gerar_ficha, _is_identificado
+from parser_edital import (
+    analisar_sem_api,
+    gerar_ficha,
+    _is_identificado,
+    calcular_confianca,
+    calcular_score_viabilidade,
+)
 
 try:
     import fitz
@@ -37,11 +53,172 @@ except Exception:
 
 load_dotenv()
 
-app = FastAPI(title="Proxy Licitação")
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        if not hasattr(record, "request_id"):
+            record.request_id = "-"
+        return True
+
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "licitapro.log"
+ERROR_LOG_FILE = LOG_DIR / "licitapro.error.log"
+
+
+def _configure_logging():
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s")
+
+    stream = logging.StreamHandler()
+    stream.setFormatter(fmt)
+    stream.addFilter(_RequestIdFilter())
+    root.addHandler(stream)
+
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    file_handler.addFilter(_RequestIdFilter())
+    root.addHandler(file_handler)
+
+    error_handler = RotatingFileHandler(ERROR_LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    error_handler.setLevel(logging.WARNING)
+    error_handler.setFormatter(fmt)
+    error_handler.addFilter(_RequestIdFilter())
+    root.addHandler(error_handler)
+
+
+_configure_logging()
+logger = logging.getLogger("licitapro")
+
+
+def _audit(event: str, request_id: str = "-", **fields):
+    payload = {"event": event, "request_id": request_id}
+    for key, value in fields.items():
+        if value is not None:
+            payload[key] = value
+    logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), extra={"request_id": request_id})
+
+
+def _shell_html(initial_page: str, main_html: str) -> str:
+    html = (
+        HTML_PAGE
+        .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
+        .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace('<div class="main-content" id="main-content"></div>', f'<div class="main-content" id="main-content">{main_html}</div>')
+    )
+    if initial_page:
+        html = html.replace("</head>", f'<script>window.__INITIAL_PAGE__="{initial_page}";</script></head>', 1)
+    return html
+
+
+def _server_editais_html() -> str:
+    hoje = datetime.date.today().isoformat()
+    total = len(_historico)
+    altos = sum(1 for r in _historico if (r.get("score") or 0) >= 75)
+    itens = _historico[:5]
+    cards = "".join(
+        f'<div class="stat-card" style="padding:16px 18px"><div style="font-size:13px;font-weight:600">{_html.escape(r.get("objeto") or "Análise de edital")}</div><div style="font-size:12px;color:var(--fg-3);margin-top:4px">{_html.escape(r.get("orgao") or "Órgão não identificado")} · {r.get("score") or "—"}%</div></div>'
+        for r in itens
+    ) or '<div class="empty-state"><div class="empty-title">Nenhum edital analisado ainda</div><div class="empty-sub">Envie um edital em Novo edital.</div></div>'
+    return f"""
+    <div class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Workspace</div>
+          <h1 class="page-title">Editais analisados</h1>
+          <p class="page-sub">{total} edital(is) no histórico · hoje: {hoje}</p>
+        </div>
+        <a class="btn btn-primary" href="/upload">Novo edital</a>
+      </div>
+      <div class="stats-grid g4">
+        <div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">{"0" if total == 0 else total} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">reseta à meia-noite</div></div>
+        <div class="stat-card"><div class="lbl">Total salvo</div><div class="val">{total}</div><div class="sub">análises no histórico</div></div>
+        <div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">{altos}</div><div class="sub">de {total} editais</div></div>
+        <div class="stat-card"><div class="lbl">Página</div><div class="val" style="font-size:18px">Editais</div><div class="sub">navegação server-side</div></div>
+      </div>
+      <div class="edital-list">{cards}</div>
+    </div>
+    """
+
+
+def _server_upload_html() -> str:
+    return """
+    <div class="page">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Novo edital</h1>
+          <p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p>
+        </div>
+      </div>
+      <label class="dropzone" id="dropzone" for="file-input">
+        <div class="dz-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+        </div>
+        <div class="dz-title">Arraste o edital ou clique para enviar</div>
+        <div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div>
+      </label>
+      <div class="file-list" id="file-list"></div>
+      <button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none">Analisar edital</button>
+    </div>
+    """
+
+
+def _server_historico_html() -> str:
+    by_day = {}
+    for r in _historico:
+        d = (r.get("timestamp") or "").split("T")[0]
+        if d:
+            by_day.setdefault(d, []).append(r)
+    rows = "".join(
+        f"<tr><td>{_html.escape(d)}</td><td>{len(items)}</td><td>{sum(len(x.get('arquivos') or []) for x in items)}</td><td>{sum((x.get('score') or 0) for x in items) // max(1, len(items))}</td></tr>"
+        for d, items in sorted(by_day.items(), reverse=True)
+    ) or '<tr><td colspan="4">Nenhuma análise ainda.</td></tr>'
+    return f"""
+    <div class="page">
+      <div class="page-header">
+        <div><h1 class="page-title">Histórico de uso</h1><p class="page-sub">Todas as análises agrupadas por dia</p></div>
+        <a class="btn btn-secondary" href="/editais">Editais</a>
+      </div>
+      <div class="stats-grid g3">
+        <div class="stat-card"><div class="lbl">Total de análises</div><div class="val">{len(_historico)}</div><div class="sub">no histórico</div></div>
+        <div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">{len(by_day)}</div><div class="sub">dias distintos</div></div>
+        <div class="stat-card"><div class="lbl">Página</div><div class="val" style="font-size:18px">Histórico</div><div class="sub">navegação server-side</div></div>
+      </div>
+      <div class="hist-table">
+        <table>
+          <thead><tr><th>Dia</th><th>Análises</th><th>Arquivos</th><th>Score médio</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def _server_logs_html() -> str:
+    log_lines = _ler_ultimas_linhas(LOG_FILE, 60)
+    err_lines = _ler_ultimas_linhas(ERROR_LOG_FILE, 30)
+    body = "\n".join(log_lines + (["", "--- erros ---"] if err_lines else []) + err_lines) or "Nenhum log disponivel."
+    return f"""
+    <div class="page">
+      <div class="page-header">
+        <div><div class="page-eyebrow">Sistema</div><h1 class="page-title">Logs</h1><p class="page-sub">Últimas linhas do log centralizado do app</p></div>
+        <a class="btn btn-secondary" href="/editais">Editais</a>
+      </div>
+      <div class="stat-card" style="padding:18px">
+        <pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--ink-50);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:70vh">{_html.escape(body)}</pre>
+      </div>
+    </div>
+    """
+
+app = FastAPI(title="Proxy LicitaÃ§Ã£o")
 
 import datetime
 
-LIMITE_DIARIO = 20  # análises por dia
+LIMITE_DIARIO = 20  # anÃ¡lises por dia
 USAR_PARSER_LOCAL = os.getenv("USAR_PARSER_LOCAL", "true").lower() not in ("0", "false", "no", "off")
 PARSER_FALLBACK_API = os.getenv("PARSER_FALLBACK_API", "true").lower() not in ("0", "false", "no", "off")
 try:
@@ -75,12 +252,19 @@ except ValueError:
     MAX_PAGINAS_GRANDES = 15
 APP_VERSION = os.getenv("APP_VERSION", "dev")
 APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
-APP_COMMIT = os.getenv("APP_COMMIT", "local")
-APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT", "")
+APP_COMMIT = os.getenv("APP_COMMIT") or os.getenv("RENDER_GIT_COMMIT") or "local"
+APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT") or ""
 APP_VERSION_LABEL = f"{APP_VERSION} · {APP_CHANNEL}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
 _OCR_ENGINE = None
+
+# Fallback local (LLM rodando localmente, ex: Ollama ou endpoint OpenAI-compat).
+LOCAL_LLM_ENABLED = os.getenv("LOCAL_LLM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+LOCAL_LLM_PROVIDER = os.getenv("LOCAL_LLM_PROVIDER", "ollama").lower()  # "ollama" | "openai_compat"
+LOCAL_LLM_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434")
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "llama3.1:8b")
+LOCAL_LLM_TIMEOUT_S = float(os.getenv("LOCAL_LLM_TIMEOUT_S", "30"))
 
 _stats = {
     "total_analises": 0,
@@ -104,21 +288,26 @@ _CUSTO = {
     "llama-3.3-70b-versatile":                (0.0,   0.0),
 }
 
-_openai = openai.AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
+_openai_api_key = os.getenv("OPENAI_API_KEY") or ""
+_openai = openai.AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key.strip() else None
 _gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-_openrouter = openai.AsyncOpenAI(
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    base_url="https://openrouter.ai/api/v1",
+_openrouter_api_key = os.getenv("OPENROUTER_API_KEY") or ""
+_openrouter = (
+    openai.AsyncOpenAI(api_key=_openrouter_api_key, base_url="https://openrouter.ai/api/v1")
+    if _openrouter_api_key.strip()
+    else None
 )
-_groq = openai.AsyncOpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
+_groq_api_key = os.getenv("GROQ_API_KEY") or ""
+_groq = (
+    openai.AsyncOpenAI(api_key=_groq_api_key, base_url="https://api.groq.com/openai/v1")
+    if _groq_api_key.strip()
+    else None
 )
-_groq2 = openai.AsyncOpenAI(
-    api_key=os.getenv("GROQ_API_KEY2"),
-    base_url="https://api.groq.com/openai/v1",
+_groq2_api_key = os.getenv("GROQ_API_KEY2") or ""
+_groq2 = (
+    openai.AsyncOpenAI(api_key=_groq2_api_key, base_url="https://api.groq.com/openai/v1")
+    if _groq2_api_key.strip()
+    else None
 )
 
 _FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -131,83 +320,100 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-SYSTEM_PROMPT = """Você é um especialista em licitações públicas brasileiras.
-REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÇÃO" — ZERO introduções, ZERO raciocínio, ZERO explicações. Apenas a ficha em Markdown.
-Se um dado realmente não constar em nenhuma parte do texto, escreva "Não informado". Mas ANTES de escrever "Não informado" em qualquer campo, leia o documento INTEIRO — especialmente seções de habilitação, anexos, cláusulas e condições. É PROIBIDO escrever "Não informado" para Documentos de Habilitação se o edital contiver qualquer lista de documentos exigidos.
-Calcule o Valor Total de cada item (Qtd × Valor Unit.).
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = uuid.uuid4().hex[:8]
+    request.state.request_id = request_id
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled request failure", extra={"request_id": request_id})
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Erro interno ao processar a requisiÃ§Ã£o.", "request_id": request_id},
+            headers={"X-Request-ID": request_id},
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+SYSTEM_PROMPT = """VocÃª Ã© um especialista em licitaÃ§Ãµes pÃºblicas brasileiras.
+REGRA ABSOLUTA: comece a resposta IMEDIATAMENTE com "## FICHA DE LICITAÃ‡ÃƒO" â€ ZERO introduÃ§Ãµes, ZERO raciocÃ­nio, ZERO explicaÃ§Ãµes. Apenas a ficha em Markdown.
+Se um dado realmente nÃ£o constar em nenhuma parte do texto, escreva "NÃ£o informado". Mas ANTES de escrever "NÃ£o informado" em qualquer campo, leia o documento INTEIRO â€ especialmente seÃ§Ãµes de habilitaÃ§Ã£o, anexos, clÃ¡usulas e condiÃ§Ãµes. Ã‰ PROIBIDO escrever "NÃ£o informado" para Documentos de HabilitaÃ§Ã£o se o edital contiver qualquer lista de documentos exigidos.
+Calcule o Valor Total de cada item (Qtd Ã— Valor Unit.).
 Siga EXATAMENTE esta estrutura:
 
-## FICHA DE LICITAÇÃO
+## FICHA DE LICITAÃ‡ÃƒO
 
 | Campo | Valor |
 |---|---|
-| **Nº / Processo** | ... |
-| **Órgão** | ... |
+| **NÂº / Processo** | ... |
+| **Ã“rgÃ£o** | ... |
 | **Modalidade** | ... |
-| **Critério de Julgamento** | ... |
+| **CritÃ©rio de Julgamento** | ... |
 | **Valor Estimado Total** | R$ ... |
-| **Vigência do Contrato** | ... |
+| **VigÃªncia do Contrato** | ... |
 | **Abertura das Propostas** | ... |
 | **Prazo para Envio de Proposta** | ... |
 
 ## Objeto
-[descrição completa do objeto licitado]
+[descriÃ§Ã£o completa do objeto licitado]
 
-## Condições Financeiras
+## CondiÃ§Ãµes Financeiras
 - **Garantia Contratual:** ...
 - **Prazo de Pagamento:** ...
-- **Patrimônio Líquido Mínimo:** ...
-- **Capital Social Mínimo:** ...
+- **PatrimÃ´nio LÃ­quido MÃ­nimo:** ...
+- **Capital Social MÃ­nimo:** ...
 
 ## Posto de Atendimento
-[local/endereço onde os serviços serão prestados ou as entregas realizadas]
+[local/endereÃ§o onde os serviÃ§os serÃ£o prestados ou as entregas realizadas]
 
-## Contato do Órgão
-[e-mail e telefone do responsável]
+## Contato do Ã“rgÃ£o
+[e-mail e telefone do responsÃ¡vel]
 
 ## Itens a Cotar
 
-| # | Descrição | Unid. | Qtd. | Valor Unit. | Valor Total |
+| # | DescriÃ§Ã£o | Unid. | Qtd. | Valor Unit. | Valor Total |
 |---|-----------|-------|------|-------------|-------------|
 | 1 | ... | ... | ... | R$ ... | R$ ... |
 
 ## Modelo de Proposta
-[tipo de taxa, o que é cotado, como lançar, observações importantes]
+[tipo de taxa, o que Ã© cotado, como lanÃ§ar, observaÃ§Ãµes importantes]
 
-## Documentos de Habilitação
+## Documentos de HabilitaÃ§Ã£o
 
-### Jurídica
+### JurÃ­dica
 - ...
 
 ### Fiscal e Trabalhista
 - ...
 
-### Econômico-Financeira
+### EconÃ´mico-Financeira
 - ...
 
-### Técnica
+### TÃ©cnica
 - ...
 
-### Outras Exigências
+### Outras ExigÃªncias
 - ...
 
-## ⚠️ Alertas
-> [ponto crítico relevante para a decisão de participar]
+## âš ï¸ Alertas
+> [ponto crÃ­tico relevante para a decisÃ£o de participar]
 
-> [próximo alerta, se houver]
+> [prÃ³ximo alerta, se houver]
 
 ## Score de Viabilidade
 **Score:** [inteiro de 0 a 100]
-**Nível:** [Alta | Média | Baixa]
+**NÃ­vel:** [Alta | MÃ©dia | Baixa]
 **Justificativa:** [2 linhas diretas avaliando acessibilidade do objeto, dificuldade das exigências e oportunidade geral]
 
-## Análise de Exigências
-[Liste cada exigência de habilitação com prefixo de status:]
-[ok] exigência — orientação breve
-[warn] exigência — por que merece atenção
-[fail] exigência — por que é restritiva
+## AnÃ¡lise de ExigÃªncias
+[Liste cada exigÃªncia de habilitaÃ§Ã£o com prefixo de status:]
+[ok] exigÃªncia â€ orientaÃ§Ã£o breve
+[warn] exigÃªncia â€ por que merece atenção
+[fail] exigÃªncia â€ por que Ã© restritiva
 
-Critérios: [ok]=padrão fácil (certidões online, CNPJ, atestados genéricos); [warn]=requer preparação, prazo <15 dias, PL específico; [fail]=muito restritivo, volume >5000 unidades, PL >R$500k, sede específica, requisito raro."""
+CritÃ©rios: [ok]=padrÃ£o fÃ¡cil (certidÃµes online, CNPJ, atestados genÃ©ricos); [warn]=requer preparaÃ§Ã£o, prazo <15 dias, PL especÃ­fico; [fail]=muito restritivo, volume >5000 unidades, PL >R$500k, sede especÃ­fica, requisito raro."""
 
 USER_TEMPLATE = "Analise o seguinte edital ({num_docs} documento(s)) e gere a ficha:\n\n{texto}"
 
@@ -303,9 +509,6 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .btn-secondary:hover{background:var(--ink-50);color:var(--fg-1)}
 .btn-sm{padding:7px 13px;font-size:13px}
 .btn:active{transform:scale(.98)}
-.modo-btn{padding:7px 16px;border-radius:var(--radius-md);font-size:13px;font-weight:600;font-family:var(--font-sans);cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--fg-2);transition:all 120ms var(--ease-out)}
-.modo-btn:hover{background:var(--ink-50);color:var(--fg-1)}
-.modo-btn.active{background:var(--brand-500);color:#fff;border-color:var(--brand-500)}
 .dropzone{border:2px dashed var(--brand-300);border-radius:var(--radius-xl);padding:64px 32px;background:var(--brand-50);text-align:center;cursor:pointer;transition:all 200ms var(--ease-out)}
 .dropzone.over,.dropzone:hover{background:var(--brand-100);border-color:var(--brand-500)}
 .dz-icon{width:56px;height:56px;border-radius:9999px;background:#fff;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;color:var(--brand-500);margin:0 auto 20px}
@@ -337,7 +540,7 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .ficha-content h2:first-child{margin-top:0}
 .ficha-content h3{font-size:14px;font-weight:600;color:var(--fg-2);margin:14px 0 6px}
 .ficha-content p{font-size:14px;line-height:1.6;color:var(--fg-2);margin-bottom:8px}
-.ficha-content table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px}
+.ficha-content table{width:100%;border-collap?se:collap?se;font-size:13px;margin-bottom:12px}
 .ficha-content th{padding:9px 12px;text-align:left;border-bottom:2px solid var(--border);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3);background:var(--ink-50)}
 .ficha-content td{padding:9px 12px;border-bottom:1px solid var(--border-subtle);color:var(--fg-1);vertical-align:top;font-size:13px}
 .ficha-content tr:last-child td{border-bottom:none}
@@ -356,7 +559,7 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .toast-item{background:var(--ink-900);color:#fff;padding:12px 16px;border-radius:var(--radius-md);font-size:13px;font-weight:500;box-shadow:var(--shadow-lg);animation:toastIn 200ms var(--ease-out)}
 @keyframes toastIn{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
 .hist-table{background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-sm)}
-.hist-table table{width:100%;border-collapse:collapse}
+.hist-table table{width:100%;border-collap?se:collap?se}
 .hist-table th{padding:12px 20px;text-align:left;border-bottom:1px solid var(--border);background:var(--ink-50);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)}
 .hist-table td{padding:13px 20px;border-bottom:1px solid var(--border-subtle);font-size:14px;font-variant-numeric:tabular-nums;color:var(--fg-1)}
 .hist-table tr:last-child td{border-bottom:none}
@@ -385,18 +588,22 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 <aside class="sidebar">
   <div class="sidebar-logo">Licita<span>Pro</span></div>
   <nav class="sidebar-nav">
-    <button class="nav-item" id="nav-editais" onclick="showPage('editais')">
+    <a class="nav-item" id="nav-editais" href="/editais" data-page="editais">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Editais
-    </button>
-    <button class="nav-item" id="nav-upload" onclick="showPage('upload')">
+    </a>
+    <a class="nav-item" id="nav-upload" href="/upload" data-page="upload">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
       Novo edital
-    </button>
-    <button class="nav-item" id="nav-historico" onclick="showPage('historico')">
+    </a>
+    <a class="nav-item" id="nav-historico" href="/historico-view" data-page="historico">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       Histórico
-    </button>
+    </a>
+    <a class="nav-item" id="nav-logs" href="/logs" data-page="logs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h16"/></svg>
+      Logs
+    </a>
     <a class="nav-item" href="/status">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       Status
@@ -422,7 +629,6 @@ var _historico=[];
 var _filter='todos';
 var _selectedFiles=[];
 var _processing=false;
-var _modoAnalise='auto';
 
 function scoreColor(s){return s>=75?'#166534':s>=50?'#92400E':'#991B1B'}
 function scoreLabel(s){return s>=75?'Alta':s>=50?'Média':'Baixa'}
@@ -452,6 +658,13 @@ function toast(msg,dur){
 }
 function escHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
+function navigateTo(page){
+  if(!page)return;
+  if(page==='detalhe')return;
+  try{location.hash='#'+page;}catch(e){}
+  showPage(page);
+}
+
 function showPage(page,data){
   _filter=page==='editais'?_filter:'todos';
   document.querySelectorAll('.nav-item').forEach(function(el){el.classList.remove('active')});
@@ -462,6 +675,7 @@ function showPage(page,data){
   else if(page==='upload')renderUploadPage(mc);
   else if(page==='detalhe')renderDetalhePage(mc,data);
   else if(page==='historico')renderHistoricoPage(mc);
+  else if(page==='logs')renderLogsPage(mc);
 }
 
 function renderEditaisPage(mc){
@@ -475,27 +689,29 @@ function renderEditaisPage(mc){
     return true;
   });
   var filterBtns=['todos','alta','media','baixa'].map(function(f){
-    var labels={todos:'Todos',alta:'Viabilidade alta',media:'Média',baixa:'Baixa'};
-    return `<button class="filter-pill${_filter===f?' active':''}" onclick="setFilter('${f}')">${labels[f]}</button>`;
+    var labels={todos:'Todos',alta:'Viabilidade alta',media:'MÃ©dia',baixa:'Baixa'};
+    return `<button type="button" class="filter-pill${_filter===f?' active':''}" data-filter="${f}">${labels[f]}</button>`;
   }).join('');
-  var emptyBtn=_historico.length===0?`<button class="btn btn-primary" style="margin-top:16px" onclick="showPage('upload')">Analisar primeiro edital</button>`:'';
+  var emptyBtn=_historico.length===0?`<a class="btn btn-primary" style="margin-top:16px" href="/upload">Analisar primeiro edital</a>`:'';
   var cards=filtered.length===0?
     `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto;display:block;color:var(--fg-4)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">${_historico.length===0?'Nenhum edital analisado ainda':'Nenhum edital neste filtro'}</div><div class="empty-sub">${_historico.length===0?'Faça upload de um PDF para começar.':'Tente outro filtro de viabilidade.'}</div>${emptyBtn}</div>`:
     filtered.map(editalCardHTML).join('');
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histórico · ordenados por data</p></div><button class="btn btn-primary" onclick="showPage('upload')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta à meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">análises no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}">${avgScore||'—'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" onclick="showPage('historico')">Histórico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Workspace</div><h1 class="page-title">Editais analisados</h1><p class="page-sub">${_historico.length} edital(is) no histórico · ordenados por data</p></div><button class="btn btn-primary" data-page="upload"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>Novo edital</button></div><div class="stats-grid g4"><div class="stat-card"><div class="lbl">Análises hoje</div><div class="val">${hoje.length} <span style="font-size:16px;font-weight:500;color:var(--fg-3)">/ 20</span></div><div class="sub">Reseta à meia-noite</div></div><div class="stat-card"><div class="lbl">Total salvo</div><div class="val">${_historico.length}</div><div class="sub">análises no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avgScore?scoreColor(avgScore):'var(--fg-4)'}">${avgScore||'—'}</div><div class="sub">${avgScore?scoreLabel(avgScore)+' viabilidade':'nenhum calculado'}</div></div><div class="stat-card"><div class="lbl">Alta viabilidade</div><div class="val" style="color:var(--success-700)">${_historico.filter(function(r){return r.score>=75}).length}</div><div class="sub">de ${_historico.length} editais</div></div></div><div class="filter-row">${filterBtns}<div class="filter-right"><button class="btn btn-secondary btn-sm" data-page="historico">Histórico de uso</button></div></div><div class="edital-list">${cards}</div></div>`;
 }
 
 function setFilter(f){_filter=f;showPage('editais')}
 
 function editalCardHTML(r){
-  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600">—</div>`;
-  return `<div class="edital-card" onclick="openEdital('${r.id}')">` + ring +
+  var ring=r.score?scoreRing(r.score,64):`<div style="width:64px;height:64px;border-radius:9999px;background:var(--ink-100);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--fg-4);font-weight:600"></div>`;
+  var anexos=(r.arquivos||[]).length;
+  return `<div class="edital-card" data-edital-id="${r.id}">` + ring +
     `<div><div class="edital-meta"><span class="edital-numero">${fmtDate(r.timestamp)}</span>` +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
-    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
-    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descrição')}</div>` +
-    `<div class="edital-orgao">${escHtml(r.orgao||'Órgão não identificado')}</div></div>` +
-    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'—')}</div>` +
+    (r.score>=85?badge('PRIORITRIO','badge-solid'):'') +
+    `</div><div class="edital-objeto">${escHtml(r.objeto||'Sem descrio')}</div>` +
+    `<div class="edital-orgao">${escHtml(r.orgao||'rgo no identificado')}</div>` +
+    `<div style="margin-top:6px;font-size:12px;color:var(--fg-3)">${anexos>0?anexos+' arquivo(s) preservado(s)':'sem anexos preservados'}</div></div>` +
+    `<div class="edital-right"><div class="edital-valor">${escHtml(r.valor||'')}</div>` +
     `<div style="margin-top:6px">${viabBadge(r.score)}</div></div></div>`;
 }
 
@@ -514,23 +730,15 @@ async function openEdital(id){
 }
 
 function renderUploadPage(mc){
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><div class="dropzone" id="dropzone"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></div><div class="file-list" id="file-list"></div><div id="modo-wrap" style="margin-top:16px;display:none"><div style="font-size:12px;font-weight:600;color:var(--fg-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Modo de análise</div><div style="display:flex;gap:6px" id="modo-btns"><button class="modo-btn active" data-modo="auto" title="Parser local com fallback automático para IA quando necessário">Auto</button><button class="modo-btn" data-modo="parser" title="Apenas parser local, sem IA (mais rápido, sem custo de API)">Código</button><button class="modo-btn" data-modo="ia" title="Envia direto para IA (Gemini / Groq), ignora o parser">IA</button></div></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:16px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Múltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><label class="dropzone" id="dropzone" for="file-input"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></label><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">MÃºltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
   var dz=document.getElementById('dropzone');
-  dz.onclick=function(){document.getElementById('file-input').click()};
   dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
   dz.ondragleave=function(){dz.classList.remove('over')};
-  dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files)};
+  dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files,true)};
   var btn=document.getElementById('btn-analisar');
   btn.onclick=analisarArquivos;
-  document.getElementById('modo-btns').addEventListener('click',function(e){
-    var b=e.target.closest('.modo-btn');
-    if(!b)return;
-    document.querySelectorAll('.modo-btn').forEach(function(x){x.classList.remove('active')});
-    b.classList.add('active');
-    _modoAnalise=b.dataset.modo;
-  });
   renderFileList();
-  document.getElementById('file-input').onchange=function(){addFiles(this.files);this.value=''};
+  document.getElementById('file-input').onchange=function(){addFiles(this.files,true);this.value=''};
 }
 
 function handleDrop(e){
@@ -538,17 +746,21 @@ function handleDrop(e){
   document.getElementById('dropzone').classList.remove('over');
   addFiles(e.dataTransfer.files);
 }
-function addFiles(files){for(var i=0;i<files.length;i++)_selectedFiles.push(files[i]);renderFileList()}
+function addFiles(files,autoStart){
+  for(var i=0;i<files.length;i++)_selectedFiles.push(files[i]);
+  renderFileList();
+  if(autoStart!==false){
+    if(!_processing)analisarArquivos();
+  }
+}
 function removeFile(i){_selectedFiles.splice(i,1);renderFileList()}
 function renderFileList(){
-  var fl=document.getElementById('file-list'),btn=document.getElementById('btn-analisar'),mw=document.getElementById('modo-wrap');
+  var fl=document.getElementById('file-list'),btn=document.getElementById('btn-analisar');
   if(!fl)return;
   fl.innerHTML=_selectedFiles.map(function(f,i){
     return `<div class="file-item"><span class="file-name">${escHtml(f.name)}</span><span class="file-size">${Math.round(f.size/1024)} KB</span><button class="file-rm" data-rm="${i}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>`;
   }).join('');
-  var show=_selectedFiles.length>0;
-  if(btn)btn.style.display=show?'flex':'none';
-  if(mw)mw.style.display=show?'block':'none';
+  if(btn)btn.style.display=_selectedFiles.length>0?'flex':'none';
   fl.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){removeFile(+b.dataset.rm)}});
 }
 
@@ -573,30 +785,34 @@ async function analisarArquivos(){
   if(_selectedFiles.length===0||_processing)return;
   _processing=true;
   var mc=document.getElementById('main-content');
-  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando edital…</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigências, calculando score de viabilidade. Até 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="processing-card"><div class="processing-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div><div style="font-size:22px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Analisando edital…</div><div style="font-size:14px;color:var(--fg-2)">Extraindo exigências, calculando score de viabilidade. AtÃ© 2 minutos.</div><div class="processing-bar"><div class="processing-fill"></div></div></div></div>`;
   try{
     var allPdfs=_selectedFiles.every(function(f){return f.name.toLowerCase().endsWith('.pdf')});
     var resp;
     if(allPdfs&&typeof pdfjsLib!=='undefined'){
-      var partes=[];
-      for(var i=0;i<_selectedFiles.length;i++){
-        var txt=await extractPdfText(_selectedFiles[i]);
-        if(!txt||txt.trim().length<100){allPdfs=false;break;}
-        var NL2=String.fromCharCode(10);
-        partes.push('=== '+_selectedFiles[i].name+' ==='+NL2+txt);
-      }
-      if(allPdfs){
-        var sep=String.fromCharCode(10)+String.fromCharCode(10);
-        var textoCompleto=partes.join(sep);
-        var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length,modo:_modoAnalise})});
-        if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
-        resp=await res.json();
+      try{
+        var partes=[];
+        for(var i=0;i<_selectedFiles.length;i++){
+          var txt=await extractPdfText(_selectedFiles[i]);
+          if(!txt||txt.trim().length<100){allPdfs=false;break;}
+          var NL2=String.fromCharCode(10);
+          partes.push('=== '+_selectedFiles[i].name+' ==='+NL2+txt);
+        }
+        if(allPdfs){
+          var sep=String.fromCharCode(10)+String.fromCharCode(10);
+          var textoCompleto=partes.join(sep);
+          var res=await fetch('/analisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:textoCompleto,num_docs:_selectedFiles.length})});
+          if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
+          resp=await res.json();
+        }
+      }catch(extractErr){
+        allPdfs=false;
+        console.warn('Falha na extração local, usando upload para o servidor:', extractErr);
       }
     }
     if(!resp){
       var fd=new FormData();
       for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
-      fd.append('modo',_modoAnalise);
       var res=await fetch('/analisar/arquivo',{method:'POST',body:fd});
       if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
       resp=await res.json();
@@ -617,7 +833,7 @@ async function analisarArquivos(){
 function parseExigencias(ficha){
   var exigs=[],lines=(ficha||'').split('\\n');
   for(var i=0;i<lines.length;i++){
-    var m=lines[i].match(/^\[(ok|warn|fail)\]\s*(.+?)(?:\s*[—–-]+\s*(.*))?$/i);
+    var m=lines[i].match(/^\\[(ok|warn|fail)\\]\\s*(.+?)(?:\\s*[â€â€“-]+\\s*(.*))?$/i);
     if(m)exigs.push({status:m[1].toLowerCase(),title:m[2].trim(),detail:(m[3]||'').trim()});
   }
   return exigs;
@@ -625,8 +841,8 @@ function parseExigencias(ficha){
 
 function fichaClean(ficha){
   return (ficha||'')
-    .replace(/## Score de Viabilidade[\s\S]*?(?=\\n## |\\n*$)/i,'')
-    .replace(/## Análise de Exigências[\s\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## Score de Viabilidade[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
+    .replace(/## Análise de Exigências[\\s\\S]*?(?=\\n## |\\n*$)/i,'')
     .trim();
 }
 
@@ -639,26 +855,29 @@ var exigIcons={
 function renderDetalhePage(mc,r){
   var exigs=parseExigencias(r.ficha);
   var exigHTML=exigs.length>0?
-    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">Análise de exigências</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigência(s) · ${exigs.filter(function(e){return e.status==='ok'}).length} ok · ${exigs.filter(function(e){return e.status==='warn'}).length} atenção · ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">AnÃ¡lise de exigências</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigência(s) · ${exigs.filter(function(e){return e.status==='ok'}).length} ok · ${exigs.filter(function(e){return e.status==='warn'}).length} atenção · ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
     exigs.map(function(e){
       return `<div class="exig-item exig-${e.status}">${exigIcons[e.status]}<div><div class="exig-title">${escHtml(e.title)}</div>${e.detail?`<div class="exig-detail">${escHtml(e.detail)}</div>`:''}</div></div>`;
     }).join('') + `</div>` : '';
 
   var fichaHtml=typeof marked!=='undefined'?marked.parse(fichaClean(r.ficha)):
     `<pre style="white-space:pre-wrap;font-size:13px">${escHtml(fichaClean(r.ficha))}</pre>`;
+  var arquivosHtml=(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).length>0?
+    `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:8px">Arquivos originais</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${(r.arquivos||[]).length} arquivo(s) preservado(s) junto desta análise.</p><div style="display:flex;flex-direction:column;gap:10px">${(r.arquivos||[]).slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0)}).map(function(a){var url='/historico/'+r.id+'/arquivos/'+a.id;return `<div class="stat-card" style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px"><div style="min-width:0"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(a.arquivo||'arquivo')}</div><div style="font-size:12px;color:var(--fg-3);margin-top:4px">${escHtml(a.mime_type||'application/octet-stream')} · ${a.tamanho_bytes?Math.round(a.tamanho_bytes/1024)+' KB':'—'}</div></div><a class="btn btn-secondary btn-sm" href="${url}">Baixar</a></div>`;}).join('')}</div></div>` : '';
 
   mc.innerHTML=
-    `<div class="page"><button class="back-btn" onclick="showPage('editais')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>Voltar para editais</button>` +
+    `<div class="page"><button class="back-btn" data-page="editais"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>Voltar para editais</button>` +
     `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">` +
     (r.timestamp?`<span style="font-family:var(--font-mono);font-size:12px;color:var(--fg-3)">${fmtDate(r.timestamp)}</span>`:'') +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
-    (r.score>=85?badge('PRIORITÁRIO','badge-solid'):'') +
+    (r.score>=85?badge('PRIORITÃRIO','badge-solid'):'') +
     `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'Análise de edital')}</h1>` +
     `<p style="font-size:15px;color:var(--fg-2)">${escHtml(r.orgao||'')}</p></div>` +
     (r.score?`<div style="flex-shrink:0;text-align:center">${scoreRing(r.score,120)}<div style="margin-top:8px;font-size:13px;font-weight:600;color:${scoreColor(r.score)}">Viabilidade ${scoreLabel(r.score)}</div></div>`:'') +
     `</div>` +
-    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'—')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'—')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'—'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'—'}</div></div></div>` +
+    `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'â€')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'â€')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'â€'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'â€'}</div></div></div>` +
     exigHTML +
+    arquivosHtml +
     `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:16px">Ficha completa</h3><div class="ficha-content">${fichaHtml}</div></div>` +
     `<div class="action-row"><button class="btn btn-secondary" id="btn-print"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Imprimir / PDF</button><button class="btn btn-secondary" id="btn-copy"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar ficha</button><button class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Gerar proposta</button></div></div>`;
   document.getElementById('btn-print').onclick=function(){window.print()};
@@ -692,7 +911,8 @@ function renderHistoricoPage(mc){
     var s=items.filter(function(r){return r.score}).map(function(r){return r.score});
     var davg=s.length?Math.round(s.reduce(function(a,b){return a+b},0)/s.length):0;
     var altas=items.filter(function(r){return r.score>=75}).length;
-    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}">${davg||'—'}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
+    var anexos=items.reduce(function(acc,r){return acc + ((r.arquivos||[]).length||0)}, 0);
+    return `<tr><td style="font-family:var(--font-mono)">${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</td><td>${items.length}</td><td>${anexos}</td><td style="font-weight:600;color:${davg?scoreColor(davg):'var(--fg-4)'}">${davg||''}</td><td style="color:var(--success-700);font-weight:600">${altas}</td></tr>`;
   }).join('');
   var seg={};
   _historico.forEach(function(r){var s=r.segmento||'Outros';seg[s]=(seg[s]||0)+1});
@@ -700,7 +920,7 @@ function renderHistoricoPage(mc){
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fff;border:1px solid var(--border);border-radius:8px;font-size:13px"><span style="color:var(--fg-2)">${escHtml(e[0])}</span><span style="font-weight:600;color:var(--brand-600);background:var(--brand-50);padding:2px 10px;border-radius:9999px;font-size:12px">${e[1]}</span></div>`;
   }).join('');
 
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Histórico de uso</h1><p class="page-sub">Todas as análises agrupadas por dia</p></div><button class="btn btn-secondary" onclick="showPage('editais')">← Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de análises</div><div class="val">${_historico.length}</div><div class="sub">no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}">${avg||'—'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma análise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>Análises</th><th>Score médio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Histórico de uso</h1><p class="page-sub">Todas as análises agrupadas por dia</p></div><button class="btn btn-secondary" data-page="editais">â† Editais</button></div><div class="stats-grid g3"><div class="stat-card"><div class="lbl">Total de análises</div><div class="val">${_historico.length}</div><div class="sub">no histórico</div></div><div class="stat-card"><div class="lbl">Score médio</div><div class="val" style="color:${avg?scoreColor(avg):'var(--fg-4)'}">${avg||'â€'}</div><div class="sub">${avg?scoreLabel(avg)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Dias com análises</div><div class="val">${days.length}</div><div class="sub">dias distintos</div></div></div>${days.length===0?'<div class="empty-state"><div class="empty-title">Nenhuma análise</div></div>':`<div class="hist-table"><table><thead><tr><th>Dia</th><th>Análises</th><th>Arquivos</th><th>Score médio</th><th>Alta viabilidade</th></tr></thead><tbody>${tableRows}</tbody></table></div>`}<div style="margin-top:32px"><h3 style="font-size:16px;font-weight:700;margin-bottom:16px">Por segmento</h3><div style="display:flex;flex-direction:column;gap:8px">${segRows||'<p style="font-size:14px;color:var(--fg-3)">Nenhum dado ainda.</p>'}</div></div></div>`;
 }
 
 async function loadHistorico(){
@@ -711,10 +931,107 @@ async function loadHistorico(){
     var qv=document.getElementById('quota-val'),qf=document.getElementById('quota-fill');
     if(qv)qv.textContent=hoje+' / 20';
     if(qf)qf.style.width=Math.min(100,(hoje/20)*100)+'%';
-  }catch(e){console.error('Erro ao carregar histórico:',e)}
+  }catch(e){console.error('Erro ao carregar histÃ³rico:',e)}
 }
 
-async function initApp(){await loadHistorico();showPage('editais')}
+async function loadLogs(limit){
+  var res=await fetch('/api/logs/recent?limit='+(limit||120));
+  if(!res.ok)throw new Error('Falha ao carregar logs');
+  return await res.json();
+}
+
+function renderLogsPage(mc){
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><div class="page-eyebrow">Sistema</div><h1 class="page-title">Logs</h1><p class="page-sub">Últimas linhas do log centralizado do app</p></div><button class="btn btn-secondary" data-page="editais"> Editais</button></div><div class="stats-grid g3" style="margin-bottom:20px"><div class="stat-card"><div class="lbl">Arquivo log</div><div class="val" style="font-size:18px">logs/licitapro.log</div><div class="sub">eventos do sistema</div></div><div class="stat-card"><div class="lbl">Arquivo erro</div><div class="val" style="font-size:18px">logs/licitapro.error.log</div><div class="sub">warnings e falhas</div></div><div class="stat-card"><div class="lbl">Fonte</div><div class="val" style="font-size:18px">/api/logs/recent</div><div class="sub">consulta local e no dev</div></div></div><div class="stat-card" style="padding:0"><div style="padding:16px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font-size:14px;font-weight:700">Últimos eventos</div><div style="font-size:12px;color:var(--fg-3)">Atualize após rodar uma análise</div></div><button class="btn btn-secondary btn-sm" id="btn-refresh-logs">Atualizar</button></div><div id="logs-box" style="padding:16px 18px"><div style="font-size:13px;color:var(--fg-3)">Carregando logs...</div></div></div></div>`;
+  var box=mc.querySelector('#logs-box');
+  var btn=mc.querySelector('#btn-refresh-logs');
+  async function refresh(){
+    try{
+      var data=await loadLogs(120);
+      var lines=(data.log||[]).concat((data.errors||[]).length?['','--- erros ---']:[]).concat(data.errors||[]);
+      box.innerHTML=lines.length?'<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--fg-2);background:var(--ink-50);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:70vh">'+escHtml(lines.join('\\n'))+'</pre>':'<div class="empty-state"><div class="empty-title">Nenhum log disponvel</div></div>';
+    }catch(e){
+      box.innerHTML='<div class="empty-state"><div class="empty-title">Erro ao carregar logs</div><div class="empty-sub">'+escHtml(e.message)+'</div></div>';
+    }
+  }
+  btn.onclick=refresh;
+  refresh();
+}
+
+async function initApp(){
+  var page=(window.__INITIAL_PAGE__ || (location.hash||'#editais').slice(1));
+  if(!page)page='editais';
+  if(page==='detalhe')page='editais';
+  showPage(page);
+  try{
+    await loadHistorico();
+    if(location.hash==='#editais' || page==='editais' || page==='historico' || page==='logs'){
+      showPage(page);
+    }
+  }catch(e){
+    console.error('Erro ao carregar histórico na inicialização:', e);
+  }
+}
+window.showPage = showPage;
+window.setFilter = setFilter;
+window.openEdital = openEdital;
+window.loadLogs = loadLogs;
+window.renderLogsPage = renderLogsPage;
+window.renderHistoricoPage = renderHistoricoPage;
+window.renderUploadPage = renderUploadPage;
+window.renderEditaisPage = renderEditaisPage;
+window.navigateTo = navigateTo;
+window.addEventListener('error', function(ev){
+  try{
+    fetch('/api/client-error', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message: ev.message || 'javascript error',
+        stack: ev.error && ev.error.stack ? ev.error.stack : '',
+        url: ev.filename || '',
+        line: ev.lineno || null,
+        col: ev.colno || null
+      })
+    });
+  }catch(e){}
+});
+window.addEventListener('unhandledrejection', function(ev){
+  try{
+    fetch('/api/client-error', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message: 'unhandledrejection: ' + (ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason || 'unknown')),
+        stack: ev.reason && ev.reason.stack ? ev.reason.stack : ''
+      })
+    });
+  }catch(e){}
+});
+document.addEventListener('click', function(e){
+  var nav=e.target.closest('[data-page]');
+  if(nav){
+    e.preventDefault();
+    navigateTo(nav.getAttribute('data-page'));
+    return;
+  }
+  var filter=e.target.closest('[data-filter]');
+  if(filter){
+    e.preventDefault();
+    setFilter(filter.getAttribute('data-filter'));
+    return;
+  }
+  var edital=e.target.closest('[data-edital-id]');
+  if(edital){
+    e.preventDefault();
+    openEdital(edital.getAttribute('data-edital-id'));
+  }
+});
+window.addEventListener('hashchange', function(){
+  var page=(location.hash||'#editais').slice(1);
+  if(!page)page='editais';
+  if(page==='detalhe')page='editais';
+  showPage(page);
+});
 initApp();
 </script>
 </body>
@@ -739,7 +1056,7 @@ def _obter_ocr_engine():
         try:
             _OCR_ENGINE = RapidOCR()
         except Exception as e:
-            print(f"[OCR] Erro ao inicializar motor OCR: {e}")
+            logger.exception("Erro ao inicializar motor OCR", extra={"request_id": "-"})
             _OCR_ENGINE = False
             return None
     return None if _OCR_ENGINE is False else _OCR_ENGINE
@@ -808,7 +1125,12 @@ def _ocr_pagina_pdf(doc, pagina_idx: int) -> str:
         resultado = engine(imagem)
         return _ocr_resultado_para_texto(resultado)
     except Exception as e:
-        print(f"[OCR] Erro na pagina {pagina_idx + 1}: {e}")
+        logger.warning(
+            "Erro na pagina OCR %s: %s",
+            pagina_idx + 1,
+            e,
+            extra={"request_id": "-"},
+        )
         return ""
 
 
@@ -817,7 +1139,12 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
     ocr_usado = False
     arquivo_grande = len(conteudo) > OCR_MAX_FILE_BYTES
     if arquivo_grande:
-        print(f"[OCR] Arquivo {len(conteudo)//1024} KB > limite {OCR_MAX_FILE_BYTES//1024} KB — OCR desativado.")
+        logger.info(
+            "Arquivo %s KB > limite %s KB - OCR desativado.",
+            len(conteudo) // 1024,
+            OCR_MAX_FILE_BYTES // 1024,
+            extra={"request_id": "-"},
+        )
     try:
         if fitz is not None and OCR_HABILITADO and not arquivo_grande:
             pdf_ocr = fitz.open(stream=conteudo, filetype="pdf")
@@ -844,7 +1171,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
 
         resultado = "\n".join(partes).strip()
         if not resultado:
-            # último recurso: OCR em sequência quando a extração nativa vier vazia.
+            # Ãºltimo recurso: OCR em sequÃªncia quando a extraÃ§Ã£o nativa vier vazia.
             if pdf_ocr is not None:
                 partes_ocr = []
                 for indice in range(min(len(pdf_ocr), OCR_MAX_PAGINAS)):
@@ -856,7 +1183,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                     ocr_usado = True
 
         if not resultado:
-            # último recurso: pdfminer.six diretamente
+            # Ãºltimo recurso: pdfminer.six diretamente
             try:
                 from pdfminer.high_level import extract_text as _pm_et
                 resultado = (_pm_et(io.BytesIO(conteudo)) or "").strip()
@@ -864,7 +1191,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pass
 
         if ocr_usado:
-            print("[OCR] OCR aplicado durante o upload do PDF.")
+            logger.info("OCR aplicado durante o upload do PDF.", extra={"request_id": "-"})
         return resultado
     finally:
         if pdf_ocr is not None:
@@ -874,11 +1201,53 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pass
 
 
+def _texto_de_odt(conteudo: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+            with zf.open("content.xml") as fh:
+                root = ET.fromstring(fh.read())
+    except Exception as e:
+        print(f"[ODT] Erro ao ler arquivo: {e}")
+        return ""
+
+    ns = {
+        "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+    }
+    partes = []
+    for tag in (".//text:h", ".//text:p"):
+        for node in root.findall(tag, ns):
+            trecho = "".join(node.itertext()).strip()
+            if trecho:
+                partes.append(trecho)
+    return "\n".join(partes).strip()
+
+
+def _texto_de_docx(conteudo: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+            with zf.open("word/document.xml") as fh:
+                root = ET.fromstring(fh.read())
+    except Exception as e:
+        print(f"[DOCX] Erro ao ler arquivo: {e}")
+        return ""
+
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    partes = []
+    for node in root.findall(".//w:t", ns):
+        trecho = (node.text or "").strip()
+        if trecho:
+            partes.append(trecho)
+    return "\n".join(partes).strip()
+
+
 def extrair_texto(nome: str, conteudo: bytes) -> str:
     nome_lower = nome.lower()
     if nome_lower.endswith(".pdf"):
         return _extrair_texto_pdf(conteudo)
     if nome_lower.endswith(".docx"):
+        texto_xml = _texto_de_docx(conteudo)
+        if texto_xml.strip():
+            return texto_xml
         doc = docx.Document(io.BytesIO(conteudo))
         return "\n".join(p.text for p in doc.paragraphs)
     if nome_lower.endswith((".xlsx", ".xls")):
@@ -892,18 +1261,311 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
                 if linha.strip():
                     linhas.append(linha)
         return "\n".join(linhas)
+    if nome_lower.endswith(".odt"):
+        return _texto_de_odt(conteudo)
     return conteudo.decode("utf-8", errors="replace")
+
+
+def extrair_texto_com_tipo(nome: str, conteudo: bytes) -> tuple[str, str]:
+    nome_lower = nome.lower()
+    if nome_lower.endswith(".pdf"):
+        return "pdf", extrair_texto(nome, conteudo)
+    if nome_lower.endswith(".docx"):
+        return "docx", extrair_texto(nome, conteudo)
+    if nome_lower.endswith((".xlsx", ".xls")):
+        return "planilha", extrair_texto(nome, conteudo)
+    if nome_lower.endswith(".odt"):
+        return "odt", extrair_texto(nome, conteudo)
+    if nome_lower.endswith((".txt", ".md", ".csv")):
+        return "texto", extrair_texto(nome, conteudo)
+    return "outro", extrair_texto(nome, conteudo)
+
+
+def montar_texto_caso_raw(arquivos: list[tuple[str, bytes]]) -> tuple[str, list[dict[str, str]]]:
+    textos = []
+    meta = []
+    for nome, conteudo in arquivos:
+        tipo, texto = extrair_texto_com_tipo(nome, conteudo)
+        texto = (texto or "").strip()
+        meta.append({"arquivo": nome, "tipo": tipo, "chars": str(len(texto))})
+        if texto:
+            textos.append((nome, tipo, texto))
+
+    partes = []
+    for nome, tipo, txt in textos:
+        partes.append(f"=== {nome} [{tipo}] ===\n{txt}")
+    return "\n\n".join(partes), meta
+
+
+def _normalizar_espacos(texto: str) -> str:
+    return re.sub(r"\s+", " ", (texto or "")).strip()
+
+
+def _score_principal(nome: str, tipo: str, texto: str) -> int:
+    n = (nome or "").lower()
+    t = _normalizar_espacos(texto[:25000]).lower()
+
+    score = 0
+    # Tipo do arquivo (preferir texto “narrativo)
+    if tipo == "pdf":
+        score += 8
+    elif tipo == "docx":
+        score += 7
+    elif tipo == "odt":
+        score += 5
+    elif tipo == "texto":
+        score += 4
+    elif tipo == "planilha":
+        score -= 3
+
+    # Nome do arquivo
+    if "edital" in n:
+        score += 8
+    if "preg" in n or "pe" in n:
+        score += 3
+    if "termo" in n or "tr" in n or "etp" in n:
+        score += 2
+    if "minuta" in n or "contrato" in n:
+        score -= 1
+    if "anexo" in n:
+        score -= 1
+    if "relacao" in n or "itens" in n:
+        score -= 1
+
+    # Sinais de cabeçalho de edital
+    for kw, w in (
+        ("pregão eletrônico", 10),
+        ("pregao eletronico", 10),
+        ("processo", 5),
+        ("uasg", 6),
+        ("contratante", 4),
+        ("objeto", 3),
+        ("valor total da contratação", 6),
+        ("data da sessão pública", 6),
+        ("critério de julgamento", 5),
+        ("criterio de julgamento", 5),
+    ):
+        if kw in t:
+            score += w
+
+    return score
+
+
+def _extrair_cabecalho_hint(texto_principal: str) -> str:
+    """
+    Gera um preâmbulo estruturado (curto) para ajudar o parser em casos compostos.
+    Não substitui o texto bruto; apenas dá pistas com campos nomeados.
+    """
+    raw = (texto_principal or "")[:60000]
+    if not raw.strip():
+        return ""
+
+    lines = [ln.strip() for ln in raw.splitlines()]
+    t = _normalizar_espacos(raw)
+
+    def first(pat: str, texto: Optional[str] = None) -> str:
+        alvo = texto if texto is not None else raw
+        m = re.search(pat, alvo, re.IGNORECASE | re.MULTILINE)
+        return m.group(1).strip() if m else ""
+
+    def find_after(labels: list[str], pat: str, max_ahead: int = 6) -> str:
+        for i, ln in enumerate(lines):
+            n = _normalizar_espacos(ln).lower()
+            if any(lbl in n for lbl in labels):
+                janela = _normalizar_espacos("\n".join(lines[i:i + max_ahead + 1]))
+                m = re.search(pat, janela, re.IGNORECASE | re.MULTILINE)
+                if m:
+                    return m.group(1).strip()
+        return ""
+
+    def first_meaningful_after(labels: list[str], max_ahead: int = 6) -> str:
+        for i, ln in enumerate(lines):
+            n = _normalizar_espacos(ln).lower()
+            if any(lbl in n for lbl in labels):
+                for j in range(i + 1, min(len(lines), i + max_ahead + 1)):
+                    cand = _normalizar_espacos(lines[j])
+                    if not cand:
+                        continue
+                    if len(cand) < 4:
+                        continue
+                    if re.fullmatch(r"[\W_]+", cand):
+                        continue
+                    if re.fullmatch(r"\(?\s*uasg\s*\)?", cand, re.IGNORECASE):
+                        continue
+                    if cand.lower() in {"contratante", "objeto", "valor", "crit?rio de julgamento", "criterio de julgamento"}:
+                        continue
+                    return cand
+        return ""
+
+    # Casos comuns em editais federais: "PREGÃO ELETRÔNICO Nº 90009/2026"
+    numero = first(r"\b((?:preg[aã]o\s+eletr[oô]nico|edital|processo(?:\s+administrativo)?)\s*(?:n[ºo°]\s*)?[\.: -]*\s*\d{1,6}[./-]\d{4})\b")
+    orgao = first_meaningful_after(["contratante", "órgão", "orgão", "uasg"])
+    if not orgao:
+        orgao = find_after(
+            ["contratante", "órgão", "orgão", "uasg"],
+            r"((?:TRIBUNAL REGIONAL DO TRABALHO|CONSELHO REGIONAL DE PSICOLOGIA|PREFEITURA MUNICIPAL|INSTITUTO INTERAMERICANO)[^\n]{0,180})",
+        )
+    if orgao:
+        orgao = re.split(r"\b(?:OBJETO|VALOR|CRIT[ÉE]RIO|DATA)\b", orgao, maxsplit=1, flags=re.IGNORECASE)[0].strip(" -:()")
+    valor = (
+        find_after(["valor total da contratação", "total da contratação", "valor total"], r"(R\$\s*[\d\.]+(?:,\d{2})?)")
+        or find_after(["valor estimado"], r"(R\$\s*[\d\.]+(?:,\d{2})?)")
+        or find_after(["valor máximo", "valor maximo"], r"(R\$\s*[\d\.]+(?:,\d{2})?)")
+        or first(r"\b(R\$\s*[\d\.]+(?:,\d{2})?)\b")
+    )
+    data = (
+        find_after(["data da sessão pública", "data da sessao publica", "abertura das propostas", "data de abertura"], r"(\d{2}/\d{2}/\d{4})")
+        or first(r"\b(\d{2}/\d{2}/\d{4})\b")
+    )
+    modalidade = "Pregão Eletrônico" if re.search(r"\bpreg[aã]o\b", t, re.IGNORECASE) and re.search(r"\beletr[oô]nico\b", t, re.IGNORECASE) else ""
+    criterio = first(r"\b((?:menor pre[cç]o(?:\s+global|\s+por\s+item)?|maior desconto|t[eé]cnica e pre[cç]o|melhor t[eé]cnica))\b")
+
+    linhas = ["## FICHA DE LICITAÇÃO (HINT)"]
+    if numero:
+        linhas.append(f"- Número do edital/processo: {numero}")
+    if orgao:
+        linhas.append(f"- Órgão: {orgao}")
+    if modalidade:
+        linhas.append(f"- Modalidade: {modalidade}")
+    if criterio:
+        linhas.append(f"- Critério de julgamento: {criterio}")
+    if valor:
+        linhas.append(f"- Valor estimado total: {valor}")
+    if data:
+        linhas.append(f"- Data de abertura: {data}")
+
+    if len(linhas) == 1:
+        return ""
+    return "\n".join(linhas) + "\n\n"
+
+
+def montar_texto_caso_classificado_raw(arquivos: list[tuple[str, bytes]]) -> tuple[str, list[dict[str, str]]]:
+    """
+    Monta o texto do caso priorizando o arquivo principal (classificado) e
+    adicionando um cabeçalho (hint) com campos nomeados do principal.
+    """
+    itens = []
+    meta = []
+    for nome, conteudo in arquivos:
+        tipo, texto = extrair_texto_com_tipo(nome, conteudo)
+        texto = (texto or "").strip()
+        meta.append({"arquivo": nome, "tipo": tipo, "chars": str(len(texto))})
+        itens.append({"arquivo": nome, "tipo": tipo, "texto": texto})
+
+    if not itens:
+        return "", meta
+
+    # escolhe principal
+    candidatos_principais = [
+        it for it in itens
+        if "edital" in (it["arquivo"] or "").lower() or "edital" in _normalizar_espacos(it["texto"][:5000]).lower()
+    ]
+    pool = candidatos_principais or itens
+    principal = max(pool, key=lambda it: _score_principal(it["arquivo"], it["tipo"], it["texto"]))
+
+    # ordena: principal primeiro, depois os demais por score desc
+    outros = [it for it in itens if it is not principal]
+    outros.sort(key=lambda it: _score_principal(it["arquivo"], it["tipo"], it["texto"]), reverse=True)
+    ordenados = [principal] + outros
+
+    cabecalho = _extrair_cabecalho_hint(principal["texto"])
+    partes = []
+    for it in ordenados:
+        if not it["texto"]:
+            continue
+        partes.append(f"=== {it['arquivo']} [{it['tipo']}] ===\n{it['texto']}")
+
+    return (cabecalho + "\n\n".join(partes)).strip(), meta
+
+
+def montar_texto_caso(arquivos: list[UploadFile]) -> tuple[str, list[dict[str, str]]]:
+    return montar_texto_caso_raw([(a.filename, a.file.read()) for a in arquivos])
+
+
+def montar_texto_caso_classificado(arquivos: list[UploadFile]) -> tuple[str, list[dict[str, str]]]:
+    return montar_texto_caso_classificado_raw([(a.filename, a.file.read()) for a in arquivos])
 
 
 # ── Histórico de análises ────────────────────────────────────────────────────
 HISTORICO_FILE = Path("historico.json")
 _DATABASE_URL = os.getenv("DATABASE_URL")
+_SUPABASE_URL = os.getenv("SUPABASE_URL")
+_SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")
+_SUPABASE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET") or "licitapro-uploads"
 
 def _db_conn():
     import psycopg2
     return psycopg2.connect(_DATABASE_URL)
 
+
+def _usa_supabase_api() -> bool:
+    return bool(_SUPABASE_URL and _SUPABASE_KEY)
+
+
+def _supabase_headers(content_type: Optional[str] = "application/json", extra: Optional[dict] = None) -> dict:
+    headers = {
+        "apikey": _SUPABASE_KEY,
+        "Authorization": f"Bearer {_SUPABASE_KEY}",
+    }
+    if content_type:
+        headers["Content-Type"] = content_type
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _supabase_request(path: str, method: str = "GET", body: Optional[bytes] = None, content_type: Optional[str] = "application/json", extra_headers: Optional[dict] = None, expect_json: bool = True):
+    if not _usa_supabase_api():
+        raise RuntimeError("Supabase API nao configurada")
+    base = _SUPABASE_URL.rstrip("/")
+    url = base + path
+    req = urllib.request.Request(url, data=body, method=method)
+    for key, value in _supabase_headers(content_type, extra_headers).items():
+        req.add_header(key, value)
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        raw = resp.read()
+        if not raw:
+            return None
+        if expect_json:
+            return json.loads(raw.decode("utf-8"))
+        return raw
+
+
+def _supabase_ensure_bucket():
+    if not _usa_supabase_api():
+        return
+    try:
+        payload = json.dumps({"name": _SUPABASE_BUCKET, "public": False}, ensure_ascii=False).encode("utf-8")
+        _supabase_request("/storage/v1/bucket", method="POST", body=payload)
+    except Exception:
+        # bucket ja existe ou a conta nao permite criacao automatica
+        pass
+
+
+def _normalizar_meta_arquivo(nome: str, conteudo: bytes, ordem: int, extra: Optional[dict] = None) -> dict:
+    meta = {
+        "id": uuid.uuid4().hex[:12],
+        "arquivo": nome,
+        "mime_type": mimetypes.guess_type(nome)[0] or "application/octet-stream",
+        "tamanho_bytes": len(conteudo),
+        "sha256": hashlib.sha256(conteudo).hexdigest(),
+        "ordem": ordem,
+    }
+    if extra:
+        for chave, valor in extra.items():
+            if valor is not None:
+                meta[chave] = valor
+    return meta
+
+
+def _storage_safe_name(nome: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(nome).name).strip("._")
+    return base or "arquivo"
+
 def _init_db():
+    if _usa_supabase_api():
+        _supabase_ensure_bucket()
+        return
     if not _DATABASE_URL:
         return
     try:
@@ -915,21 +1577,78 @@ def _init_db():
                         dados JSONB NOT NULL
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS historico_arquivos (
+                        id TEXT PRIMARY KEY,
+                        analise_id TEXT NOT NULL REFERENCES historico(id) ON DELETE CASCADE,
+                        ordem INTEGER NOT NULL,
+                        nome_original TEXT NOT NULL,
+                        mime_type TEXT,
+                        tamanho_bytes INTEGER,
+                        sha256 TEXT,
+                        tipo_extraido TEXT,
+                        chars_extraidos INTEGER,
+                        conteudo BYTEA NOT NULL,
+                        criado_em TIMESTAMPTZ DEFAULT now()
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_historico_arquivos_analise_id
+                    ON historico_arquivos (analise_id, ordem)
+                """)
             conn.commit()
     except Exception as e:
-        print(f"[DB] Erro ao inicializar tabela: {e}")
+        logger.exception("Erro ao inicializar tabela do hist?rico", extra={"request_id": "-"})
 
 def _carregar_historico() -> list:
+    if _usa_supabase_api():
+        try:
+            rows = _supabase_request("/rest/v1/historico?select=dados", method="GET")
+            historico = [r.get("dados", r) for r in (rows or [])]
+            historico.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+            return historico
+        except Exception as e:
+            logger.exception("Erro ao carregar hist?rico do Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
         try:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT dados FROM historico ORDER BY dados->>'timestamp' DESC")
                     rows = cur.fetchall()
-                    if rows:
-                        return [r[0] for r in rows]
+                    historico = [r[0] for r in rows] if rows else []
+                    if historico:
+                        cur.execute("""
+                            SELECT
+                                id,
+                                analise_id,
+                                ordem,
+                                nome_original,
+                                mime_type,
+                                tamanho_bytes,
+                                sha256,
+                                tipo_extraido,
+                                chars_extraidos
+                            FROM historico_arquivos
+                            ORDER BY analise_id, ordem, criado_em
+                        """)
+                        anexos: dict[str, list[dict]] = {}
+                        for arq in cur.fetchall():
+                            analise_id = arq[1]
+                            anexos.setdefault(analise_id, []).append({
+                                "id": arq[0],
+                                "arquivo": arq[3],
+                                "mime_type": arq[4],
+                                "tamanho_bytes": arq[5],
+                                "sha256": arq[6],
+                                "ordem": arq[2],
+                                "tipo_extraido": arq[7],
+                                "chars_extraidos": arq[8],
+                            })
+                        for item in historico:
+                            item["arquivos"] = anexos.get(item.get("id"), [])
+                    return historico
         except Exception as e:
-            print(f"[DB] Erro ao carregar histórico: {e}")
+            logger.exception("Erro ao carregar hist?rico do banco", extra={"request_id": "-"})
     try:
         if HISTORICO_FILE.exists():
             return json.loads(HISTORICO_FILE.read_text(encoding="utf-8"))
@@ -942,7 +1661,7 @@ _historico: list = _carregar_historico()
 
 # migra automaticamente do arquivo para o banco se o banco estiver vazio
 def _migrar_se_necessario():
-    if not _DATABASE_URL or not _historico:
+    if _usa_supabase_api() or not _DATABASE_URL or not _historico:
         return
     try:
         with _db_conn() as conn:
@@ -951,27 +1670,49 @@ def _migrar_se_necessario():
                 count = cur.fetchone()[0]
         if count == 0:
             _salvar_historico()
-            print(f"[DB] Migração: {len(_historico)} análise(s) importadas do arquivo.")
+            logger.info("Migra?o do hist?rico: %s an?lise(s) importadas do arquivo.", len(_historico), extra={"request_id": "-"})
     except Exception as e:
-        print(f"[DB] Erro na migração: {e}")
+        logger.exception("Erro na migra?o do hist?rico", extra={"request_id": "-"})
 
 _migrar_se_necessario()
 
 def _salvar_historico():
+    if _usa_supabase_api():
+        try:
+            for item in _historico:
+                payload = json.dumps({"id": item.get("id"), "dados": item}, ensure_ascii=False).encode("utf-8")
+                _supabase_request(
+                    "/rest/v1/historico?on_conflict=id",
+                    method="POST",
+                    body=payload,
+                    extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                )
+            return
+        except Exception:
+            logger.exception("Erro ao salvar historico via Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
         try:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
+                    ids_atuais = []
                     for item in _historico:
+                        ids_atuais.append(item.get("id"))
+                        item_db = {k: v for k, v in item.items() if k != "arquivos"}
                         cur.execute("""
                             INSERT INTO historico (id, dados)
                             VALUES (%s, %s::jsonb)
                             ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados
-                        """, (item.get("id"), json.dumps(item, ensure_ascii=False)))
+                        """, (item.get("id"), json.dumps(item_db, ensure_ascii=False)))
+                    if ids_atuais:
+                        cur.execute("DELETE FROM historico WHERE NOT (id = ANY(%s::text[]))", (ids_atuais,))
+                    else:
+                        cur.execute("DELETE FROM historico_arquivos")
+                        cur.execute("DELETE FROM historico")
                 conn.commit()
             return
         except Exception as e:
-            print(f"[DB] Erro ao salvar histórico: {e}")
+            logger.exception("Erro ao salvar historico", extra={"request_id": "-"})
+
     try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -980,83 +1721,70 @@ def _salvar_historico():
         pass
 
 _SEGMENTOS = [
-    ("Saúde",                  ["saúde", "saude", "médic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirúrgic", "farmác", "farmac", "ambulatorial"]),
-    ("Educação",               ["escola", "educação", "educacao", "pedagóg", "pedagogic", "didátic", "ensino", "aluno", "professor", "material escolar", "creche"]),
-    ("Obras e Infraestrutura", ["obras", "construção", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elétric", "eletric", "hidráulic", "hidraulic", "saneamento"]),
-    ("Alimentação",            ["aliment", "merenda", "refeição", "refeicao", "gêneros alimentíc", "generos aliment", "nutri", "cozinha", "marmita"]),
-    ("Tecnologia e TI",        ["software", "hardware", "computador", "informática", "informatica", "sistema", "licença", "servidor", " ti ", "tecnologia da informação", "impressora"]),
-    ("Transporte",             ["veículo", "veiculo", "frota", "combustível", "combustivel", "ônibus", "onibus", "manutenção veicular", "locação de veículo", "locacao de veiculo"]),
-    ("Viagens e Passagens",    ["passagem aérea", "passagem aerea", "passagem área", "bilhete aéreo", "bilhete aereo", "aéreo", "aereo", "aérea", "aerea", "aviação", "aviacao", "companhia aérea", "companhia aerea", "passagem", "hospedagem", "diária", "diaria", "hotel", "viagem"]),
-    ("Eventos e Capacitação",  ["evento", "congresso", "capacitação", "capacitacao", "treinamento", "curso", "palestra", "cerimônia", "cerimonia"]),
-    ("Limpeza e Conservação",  ["limpeza", "higien", "conservação predial", "conservacao predial", "jardinagem", "desinfeção", "desinfecao", "asseio", "zeladoria"]),
-    ("Mobiliário e Escritório",["mobiliário", "mobiliario", "mobília", "mobilia", "escritório", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritório", "material de escritorio"]),
-    ("Segurança",              ["segurança", "seguranca", "vigilância", "vigilancia", "monitoramento", "câmera", "camera", "cctv", "alarme", "portaria"]),
+    ("SaÃºde",                  ["saÃºde", "saude", "mÃ©dic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirÃºrgic", "farmÃ¡c", "farmac", "ambulatorial"]),
+    ("EducaÃ§Ã£o",               ["escola", "educaÃ§Ã£o", "educacao", "pedagÃ³g", "pedagogic", "didÃ¡tic", "ensino", "aluno", "professor", "material escolar", "creche"]),
+    ("Obras e Infraestrutura", ["obras", "construÃ§Ã£o", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elÃ©tric", "eletric", "hidrÃ¡ulic", "hidraulic", "saneamento"]),
+    ("AlimentaÃ§Ã£o",            ["aliment", "merenda", "refeiÃ§Ã£o", "refeicao", "gÃªneros alimentÃ­c", "generos aliment", "nutri", "cozinha", "marmita"]),
+    ("Tecnologia e TI",        ["software", "hardware", "computador", "informÃ¡tica", "informatica", "sistema", "licenÃ§a", "servidor", " ti ", "tecnologia da informaÃ§Ã£o", "impressora"]),
+    ("Transporte",             ["veÃ­culo", "veiculo", "frota", "combustÃ­vel", "combustivel", "Ã´nibus", "onibus", "manutenÃ§Ã£o veicular", "locaÃ§Ã£o de veÃ­culo", "locacao de veiculo"]),
+    ("Viagens e Passagens",    ["passagem aÃ©rea", "passagem aerea", "passagem Ã¡rea", "bilhete aÃ©reo", "bilhete aereo", "aÃ©reo", "aereo", "aÃ©rea", "aerea", "aviaÃ§Ã£o", "aviacao", "companhia aÃ©rea", "companhia aerea", "passagem", "hospedagem", "diÃ¡ria", "diaria", "hotel", "viagem"]),
+    ("Eventos e CapacitaÃ§Ã£o",  ["evento", "congresso", "capacitaÃ§Ã£o", "capacitacao", "treinamento", "curso", "palestra", "cerimÃ´nia", "cerimonia"]),
+    ("Limpeza e ConservaÃ§Ã£o",  ["limpeza", "higien", "conservaÃ§Ã£o predial", "conservacao predial", "jardinagem", "desinfeÃ§Ã£o", "desinfecao", "asseio", "zeladoria"]),
+    ("MobiliÃ¡rio e EscritÃ³rio",["mobiliÃ¡rio", "mobiliario", "mobÃ­lia", "mobilia", "escritÃ³rio", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritÃ³rio", "material de escritorio"]),
+    ("SeguranÃ§a",              ["seguranÃ§a", "seguranca", "vigilÃ¢ncia", "vigilancia", "monitoramento", "cÃ¢mera", "camera", "cctv", "alarme", "portaria"]),
 ]
 
 def detectar_segmento(texto: str) -> str:
-    # Prioridade 1: linha de score da ficha "- Segmento X: N/40 pts"
-    m = re.search(r'Segmento\s+([^\n:]+?):\s*\d+/40', texto)
-    if m:
-        seg_nome = m.group(1).strip()
-        for nome, _ in _SEGMENTOS:
-            if nome.lower() in seg_nome.lower() or seg_nome.lower() in nome.lower():
-                return nome
-    # Prioridade 2: contagem de matches por segmento (evita falso positivo por primeiro match)
     t = texto.lower()
-    contagens: dict[str, int] = {}
     for nome, palavras in _SEGMENTOS:
-        contagens[nome] = sum(1 for p in palavras if p in t)
-    melhor = max(contagens, key=lambda n: contagens[n])
-    if contagens[melhor] > 0:
-        return melhor
+        if any(p in t for p in palavras):
+            return nome
     return "Outros"
 
 def extrair_campo(ficha: str, campo: str) -> str:
-    # padrão markdown: | **Campo** | valor |
+    # padrÃ£o markdown: | **Campo** | valor |
     m = re.search(rf'\|\s*\*\*{re.escape(campo)}\*\*\s*\|\s*([^|\n]+)', ficha)
     if m:
         return m.group(1).strip()
-    # padrão texto puro: "Campo: valor" ou "Campo    valor"
+    # padrÃ£o texto puro: "Campo: valor" ou "Campo    valor"
     m = re.search(rf'(?:^|\n)\s*{re.escape(campo)}\s*[:\t|]+\s*([^\n]+)', ficha, re.IGNORECASE)
     if m:
         return m.group(1).strip()[:150]
-    return "Não informado"
+    return "NÃ£o informado"
 
 def extrair_objeto(ficha: str) -> str:
-    # seção markdown
+    # seÃ§Ã£o markdown
     m = re.search(r'## Objeto\s*\n+(.+?)(?:\n##|\Z)', ficha, re.DOTALL)
     if m:
         return m.group(1).strip()[:200]
-    # seção texto puro
+    # seÃ§Ã£o texto puro
     m = re.search(r'Objeto\s*\n+(.+?)(?:\n\n|\Z)', ficha, re.DOTALL)
     if m:
         return m.group(1).strip()[:200]
-    return "Não informado"
+    return "NÃ£o informado"
 
 def extrair_score(ficha: str) -> int:
-    # Captura "Score de Viabilidade: 55/100" e também "**Score:** 55" (formato antigo)
-    for pat in (r'Score[^:]*:\*?\*?\s*(\d+)/100', r'\*\*Score:\*\*\s*(\d+)'):
-        m = re.search(pat, ficha)
-        if m:
-            try:
-                return max(0, min(100, int(m.group(1))))
-            except Exception:
-                pass
+    m = re.search(r'\*\*Score:\*\*\s*(\d+)', ficha)
+    if m:
+        try:
+            return max(0, min(100, int(m.group(1))))
+        except Exception:
+            pass
     return 0
 
 def _eh_ficha(texto: str) -> bool:
-    # normaliza espaços e coloca em maiúsculas
+    # normaliza espaÃ§os e coloca em maiÃºsculas
     t = " ".join(texto.upper().split())
     # match direto (com ou sem acento)
-    if "FICHA DE LICITAÇ" in t or "FICHA DE LICITAC" in t:
+    if "FICHA DE LICITAÃ‡" in t or "FICHA DE LICITAC" in t:
         return True
     # "FICHA" + "LICITA" em qualquer lugar (cobre encoding quebrado)
     if "FICHA" in t and "LICITA" in t:
         return True
-    # fallback: presença de vários campos típicos de ficha
+    # fallback: presenÃ§a de vÃ¡rios campos tÃ­picos de ficha
     campos_tipicos = [
         "VALOR ESTIMADO", "DOCUMENTOS DE HABILITA", "ITENS A COTAR",
-        "MODALIDADE", "VIGÊNCIA", "VIGENCIA", "CRITÉRIO", "CRITERIO",
+        "MODALIDADE", "VIGÃŠNCIA", "VIGENCIA", "CRITÃ‰RIO", "CRITERIO",
         "PRAZO DE PAGAMENTO", "CONTATO DO", "ABERTURA",
     ]
     return sum(1 for c in campos_tipicos if c in t) >= 3
@@ -1065,7 +1793,7 @@ def registrar_analise(ficha: str):
     registro = {
         "id":        uuid.uuid4().hex[:10],
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     extrair_campo(ficha, "Órgão"),
+        "orgao":     extrair_campo(ficha, "Ã“rgÃ£o"),
         "valor":     extrair_campo(ficha, "Valor Estimado Total"),
         "objeto":    extrair_objeto(ficha),
         "segmento":  detectar_segmento(ficha),
@@ -1090,11 +1818,160 @@ def _reclassificar_historico():
 _reclassificar_historico()
 
 
+def _normalizar_meta_extracao(meta_arquivos: Optional[list[dict]]) -> dict[str, dict]:
+    saida: dict[str, dict] = {}
+    for item in meta_arquivos or []:
+        nome = item.get("arquivo") or item.get("nome")
+        if not nome:
+            continue
+        chars = item.get("chars")
+        try:
+            chars_int = int(chars) if chars not in (None, "") else None
+        except Exception:
+            chars_int = None
+        saida[nome] = {
+            "tipo_extraido": item.get("tipo"),
+            "chars_extraidos": chars_int,
+        }
+    return saida
+
+
+def _persistir_arquivos_analise(analise_id: str, arquivos_raw: list[tuple[str, bytes]], meta_arquivos: Optional[list[dict]] = None) -> list[dict]:
+    anexos: list[dict] = []
+    meta_por_nome = _normalizar_meta_extracao(meta_arquivos)
+    if not arquivos_raw:
+        return anexos
+
+    if _usa_supabase_api():
+        try:
+            for ordem, (nome, conteudo) in enumerate(arquivos_raw):
+                extra = meta_por_nome.get(nome, {})
+                safe_name = _storage_safe_name(nome)
+                storage_path = f"{analise_id}/{ordem:02d}_{safe_name}"
+                _supabase_request(
+                    f"/storage/v1/object/{_SUPABASE_BUCKET}/{quote(storage_path, safe='/')}",
+                    method="POST",
+                    body=conteudo,
+                    content_type=mimetypes.guess_type(nome)[0] or "application/octet-stream",
+                    extra_headers={"x-upsert": "true"},
+                    expect_json=True,
+                )
+                meta = _normalizar_meta_arquivo(nome, conteudo, ordem, extra=extra)
+                meta["storage_path"] = storage_path
+                meta["bucket"] = _SUPABASE_BUCKET
+                anexos.append(meta)
+            return anexos
+        except Exception:
+            logger.exception("Erro ao salvar arquivos via Supabase API", extra={"request_id": "-"})
+
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM historico_arquivos WHERE analise_id = %s", (analise_id,))
+                    for ordem, (nome, conteudo) in enumerate(arquivos_raw):
+                        extra = meta_por_nome.get(nome, {})
+                        meta = _normalizar_meta_arquivo(nome, conteudo, ordem, extra=extra)
+                        cur.execute("""
+                            INSERT INTO historico_arquivos (
+                                id, analise_id, ordem, nome_original, mime_type,
+                                tamanho_bytes, sha256, tipo_extraido, chars_extraidos, conteudo
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO UPDATE SET
+                                analise_id = EXCLUDED.analise_id,
+                                ordem = EXCLUDED.ordem,
+                                nome_original = EXCLUDED.nome_original,
+                                mime_type = EXCLUDED.mime_type,
+                                tamanho_bytes = EXCLUDED.tamanho_bytes,
+                                sha256 = EXCLUDED.sha256,
+                                tipo_extraido = EXCLUDED.tipo_extraido,
+                                chars_extraidos = EXCLUDED.chars_extraidos,
+                                conteudo = EXCLUDED.conteudo
+                        """, (
+                            meta["id"],
+                            analise_id,
+                            ordem,
+                            nome,
+                            meta["mime_type"],
+                            meta["tamanho_bytes"],
+                            meta["sha256"],
+                            meta.get("tipo_extraido"),
+                            meta.get("chars_extraidos"),
+                            conteudo,
+                        ))
+                        anexos.append(meta)
+                conn.commit()
+            return anexos
+        except Exception:
+            logger.exception("Erro ao salvar arquivos do hist?rico", extra={"request_id": "-"})
+
+    for ordem, (nome, conteudo) in enumerate(arquivos_raw):
+        extra = meta_por_nome.get(nome, {})
+        anexos.append(_normalizar_meta_arquivo(nome, conteudo, ordem, extra=extra))
+    return anexos
+
+
+def _contar_registros_db() -> dict:
+    if _usa_supabase_api():
+        try:
+            historico = _supabase_request("/rest/v1/historico?select=id", method="GET") or []
+            anexos = sum(len(item.get("dados", {}).get("arquivos", [])) for item in (_supabase_request("/rest/v1/historico?select=dados", method="GET") or []))
+            return {"db_configured": True, "historico_rows": len(historico), "arquivo_rows": anexos}
+        except Exception as exc:
+            logger.exception("Erro ao consultar status do Supabase API", extra={"request_id": "-"})
+            return {"db_configured": True, "historico_rows": None, "arquivo_rows": None, "db_error": str(exc)}
+    if not _DATABASE_URL:
+        return {"db_configured": False, "historico_rows": None, "arquivo_rows": None}
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM historico")
+                historico_rows = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM historico_arquivos")
+                arquivo_rows = int(cur.fetchone()[0])
+        return {"db_configured": True, "historico_rows": historico_rows, "arquivo_rows": arquivo_rows}
+    except Exception as exc:
+        logger.exception("Erro ao consultar status do banco", extra={"request_id": "-"})
+        return {"db_configured": True, "historico_rows": None, "arquivo_rows": None, "db_error": str(exc)}
+
+
+def _ler_ultimas_linhas(arquivo: Path, limite: int = 100) -> list[str]:
+    if not arquivo.exists():
+        return []
+    try:
+        linhas = arquivo.read_text(encoding="utf-8", errors="replace").splitlines()
+        return linhas[-limite:]
+    except Exception:
+        return []
+
+
+def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto"):
+    analise_id = uuid.uuid4().hex[:10]
+    anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
+    registro = {
+        "id":        analise_id,
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "orgao":     extrair_campo(ficha, "Ãƒâ€œrgÃƒÂ£o"),
+        "valor":     extrair_campo(ficha, "Valor Estimado Total"),
+        "objeto":    extrair_objeto(ficha),
+        "segmento":  detectar_segmento(ficha),
+        "score":     extrair_score(ficha),
+        "ficha":     ficha,
+        "arquivos":  anexos,
+        "fonte":     fonte,
+    }
+    _historico.insert(0, registro)
+    if len(_historico) > 500:
+        _historico.pop()
+    _salvar_historico()
+
+
 MAX_CHARS = 400_000
 
-# Textos pequenos: Groq e OpenRouter primeiro (gratuitos), OpenAI só se necessário
+# Textos pequenos: Groq e OpenRouter primeiro (gratuitos), OpenAI sÃ³ se necessÃ¡rio
 # Textos grandes: OpenAI primeiro (melhor qualidade para docs longos)
-LIMITE_PEQUENO = 15_000  # chars — abaixo disso evita cobrar do OpenAI
+LIMITE_PEQUENO = 15_000  # chars â€ abaixo disso evita cobrar do OpenAI
 
 PROVEDORES_PEQUENO = [
     ("gemini", "gemini-2.5-flash-lite",   400_000),
@@ -1173,6 +2050,9 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
     provedores = PROVEDORES_PEQUENO if len(texto) <= LIMITE_PEQUENO else PROVEDORES_GRANDE
 
     for cliente, modelo, max_chars in provedores:
+        if cliente is None:
+            ultimo_erro = "provedor sem API key configurada"
+            continue
         if cliente == "gemini":
             try:
                 ficha = await _chamar_gemini_http(texto[:max_chars], num_docs, modelo)
@@ -1226,12 +2106,12 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
                 p["tokens"]   += tok_in + tok_out
                 p["custo_usd"] = round(p["custo_usd"] + custo, 6)
                 return ficha
-            ultimo_erro = f"Modelo {modelo} não seguiu o formato esperado"
+            ultimo_erro = f"Modelo {modelo} nÃ£o seguiu o formato esperado"
             continue
         except openai.APITimeoutError:
             raise HTTPException(504, "Tempo limite excedido ao chamar a API.")
         except openai.APIConnectionError:
-            raise HTTPException(500, "Erro de conexão com a API.")
+            raise HTTPException(500, "Erro de conexÃ£o com a API.")
         except openai.APIStatusError as e:
             if e.status_code in (400, 401, 402, 404, 413, 429, 503):
                 msg = str(e.message)
@@ -1247,13 +2127,13 @@ async def chamar_groq(texto: str, num_docs: int) -> str:
                         tempo = f"{segundos} segundos"
                     ultimo_erro = tempo
                 elif 'per-day' in msg or 'per_day' in msg or 'daily' in msg.lower():
-                    ultimo_erro = "algumas horas (limite diário atingido)"
+                    ultimo_erro = "algumas horas (limite diÃ¡rio atingido)"
                 else:
                     ultimo_erro = "alguns minutos"
                 continue
             raise HTTPException(500, f"Erro ao chamar a API: {e.message}")
 
-    raise HTTPException(503, f"Todas as IAs estão sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
+    raise HTTPException(503, f"Todas as IAs estÃ£o sobrecarregadas no momento. Tente novamente em {ultimo_erro or 'alguns minutos'}.")
 
 
 def _registrar_uso_parser_local(confianca: int):
@@ -1268,8 +2148,171 @@ def _registrar_uso_parser_local(confianca: int):
     p["confianca"] = confianca
 
 
+def _http_post_json(url: str, payload: dict, timeout_s: float) -> dict:
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return {"_raw": raw.decode("utf-8", errors="replace")}
+
+
+async def _chamar_llm_local_chat(messages: list[dict], model: str) -> str:
+    if not LOCAL_LLM_ENABLED:
+        raise HTTPException(503, "LLM local desativado.")
+
+    if LOCAL_LLM_PROVIDER == "ollama":
+        url = LOCAL_LLM_BASE_URL.rstrip("/") + "/api/chat"
+        payload = {"model": model, "messages": messages, "stream": False}
+        try:
+            data = await asyncio.to_thread(_http_post_json, url, payload, LOCAL_LLM_TIMEOUT_S)
+        except Exception as e:
+            raise HTTPException(503, f"Falha ao chamar LLM local (Ollama): {e}")
+        content = (
+            (data.get("message") or {}).get("content")
+            or (data.get("response") or "")
+            or ""
+        )
+        return str(content).strip()
+
+    if LOCAL_LLM_PROVIDER == "openai_compat":
+        url = LOCAL_LLM_BASE_URL.rstrip("/") + "/v1/chat/completions"
+        payload = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+        try:
+            data = await asyncio.to_thread(_http_post_json, url, payload, LOCAL_LLM_TIMEOUT_S)
+        except Exception as e:
+            raise HTTPException(503, f"Falha ao chamar LLM local (OpenAI-compat): {e}")
+        choices = data.get("choices") or []
+        if choices:
+            content = (((choices[0] or {}).get("message") or {}).get("content") or "").strip()
+            return content
+        return ""
+
+    raise HTTPException(500, f"LOCAL_LLM_PROVIDER inválido: {LOCAL_LLM_PROVIDER}")
+
+
+def _montar_ficha_a_partir_de_campos(campos: dict) -> str:
+    # Mantém compatibilidade com o restante do app (render e histórico).
+    return gerar_ficha(campos)
+
+
+async def tentar_fallback_llm_local(texto: str, num_docs: int) -> str | None:
+    """
+    Fallback local para extrair campos principais quando o parser falhar.
+    Retorna uma ficha em Markdown ou None.
+    """
+    if not LOCAL_LLM_ENABLED:
+        return None
+
+    system = (
+        "Você é um extrator de informações de editais brasileiros.\n"
+        "Tarefa: extrair os campos principais de um edital (podem existir anexos misturados).\n"
+        "\n"
+        "Regras:\n"
+        "1) Responda APENAS em JSON válido (sem markdown).\n"
+        "2) Para cada campo, inclua também uma evidência curta (trecho literal do texto) que justifique.\n"
+        "3) Se houver conflito (valores unitários vs total), priorize o TOTAL do contrato/contratação.\n"
+        "4) Para datas, priorize a data/hora da sessão pública/abertura de propostas.\n"
+        "\n"
+        "Formato de saída:\n"
+        "{\n"
+        '  \"numero_edital\": \"...\",\n'
+        '  \"orgao\": \"...\",\n'
+        '  \"modalidade\": \"...\",\n'
+        '  \"objeto\": \"...\",\n'
+        '  \"valor\": \"...\",\n'
+        '  \"data_abertura\": \"...\",\n'
+        '  \"criterio_julgamento\": \"...\",\n'
+        '  \"prazo_vigencia\": \"...\",\n'
+        '  \"evidencias\": {\n'
+        '    \"numero_edital\": \"...\",\n'
+        '    \"orgao\": \"...\",\n'
+        '    \"valor\": \"...\",\n'
+        '    \"data_abertura\": \"...\"\n'
+        "  }\n"
+        "}\n"
+        "\n"
+        "Use 'Não identificado' quando não encontrar."
+    )
+    user = (
+        f"Documentos no caso: {num_docs}\n\n"
+        "Texto consolidado do edital (pode conter anexos):\n"
+        + texto[:120000]
+    )
+    content = await _chamar_llm_local_chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        LOCAL_LLM_MODEL,
+    )
+    if not content:
+        return None
+    try:
+        data = json.loads(content)
+    except Exception:
+        # tenta recuperar JSON dentro de texto maior
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+
+    evid = data.get("evidencias") or {}
+
+    def _pick_best_valor(texto_all: str, valor_llm: str) -> str:
+        # tenta puxar o valor total quando houver marcador forte no texto
+        t = texto_all
+        m = re.search(r"(?:valor\\s+total\\s+da\\s+contrata[cç][aã]o|total\\s+da\\s+contrata[cç][aã]o|valor\\s+estimado\\s+total)[^\\n]{0,80}?(R\\$\\s*[\\d\\.]{1,3}(?:\\.[\\d]{3})*(?:,\\d{2})?)", t, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        return valor_llm
+
+    def _pick_best_data(texto_all: str, data_llm: str) -> str:
+        t = texto_all
+        m = re.search(r"(?:data\\s+da\\s+sess[aã]o\\s+p[uú]blica|abertura\\s+da\\s+sess[aã]o|sess[aã]o\\s+p[uú]blica)[^\\n]{0,80}?(\\d{2}/\\d{2}/\\d{4})", t, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        return data_llm
+
+    valor_llm = (data.get("valor") or "").strip() or "Não identificado"
+    data_llm = (data.get("data_abertura") or "").strip() or "Não identificado"
+    valor_corr = _pick_best_valor(texto, valor_llm)
+    data_corr = _pick_best_data(texto, data_llm)
+
+    campos = {
+        "numero_edital": (data.get("numero_edital") or "").strip() or "Não identificado",
+        "orgao": (data.get("orgao") or "").strip() or "Não identificado",
+        "cnpj": "Não identificado",
+        "modalidade": (data.get("modalidade") or "").strip() or "Não identificado",
+        "objeto": (data.get("objeto") or "").strip() or "Não identificado",
+        "valor": valor_corr,
+        "data_abertura": data_corr,
+        "prazo_envio_proposta": "Não identificado",
+        "prazo_vigencia": (data.get("prazo_vigencia") or "").strip() or "Não identificado",
+        "criterio_julgamento": (data.get("criterio_julgamento") or "").strip() or "Não identificado",
+        "documentos_habilitacao": [],
+        "segmento": detectar_segmento((data.get("objeto") or "") + "\n" + texto),
+    }
+    confianca, faltantes = calcular_confianca(campos)
+    campos["confianca"] = confianca
+    campos["faltantes"] = faltantes
+    campos["usar_fallback_api"] = False
+    score, nivel, justificativas = calcular_score_viabilidade(campos)
+    campos["score"] = score
+    campos["nivel"] = nivel
+    campos["justificativas_score"] = justificativas
+    return _montar_ficha_a_partir_de_campos(campos)
+
+
 async def _enriquecer_cnpj(cnpj: str) -> dict | None:
-    """Consulta BrasilAPI para obter razão social oficial do CNPJ. Gratuito, sem auth."""
+    """Consulta BrasilAPI para obter razÃ£o social oficial do CNPJ. Gratuito, sem auth."""
     cnpj_limpo = re.sub(r"\D", "", cnpj)
     if len(cnpj_limpo) != 14:
         return None
@@ -1282,90 +2325,114 @@ async def _enriquecer_cnpj(cnpj: str) -> dict | None:
                 return json.loads(resp.read().decode())
         return await loop.run_in_executor(None, _fetch)
     except Exception as e:
-        print(f"[CNPJ] Falha ao consultar {cnpj_limpo}: {e}")
+        logger.warning("Falha ao consultar CNPJ %s: %s", cnpj_limpo, e, extra={"request_id": "-"})
         return None
 
 
 async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -> str:
     # modo "ia": pula o parser e vai direto para IA
     if modo == "ia" or not USAR_PARSER_LOCAL:
-        print(f"[MODO] Análise por IA (modo={modo})")
+        logger.info("Analise por IA (modo=%s)", modo, extra={"request_id": "-"})
         return await chamar_groq(texto, num_docs)
 
     try:
         resultado = analisar_sem_api(texto, min_confianca=PARSER_MIN_CONFIANCA)
-    except Exception as e:
-        print(f"[PARSER] Erro no parser local: {e}")
+    except Exception:
+        logger.exception("Erro no parser local", extra={"request_id": "-"})
         if modo != "parser" and PARSER_FALLBACK_API:
             return await chamar_groq(texto, num_docs)
         raise HTTPException(500, "Erro ao analisar edital pelo parser local.")
 
+    texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
+
     # modo "parser": retorna o resultado do parser sem nunca chamar IA
     if modo == "parser":
-        print(f"[MODO] Análise por parser (confiança={resultado.get('confianca', 0)}%)")
+        logger.info(
+            "Analise por parser (confiança=%s%%)",
+            resultado.get("confianca", 0),
+            extra={"request_id": "-"},
+        )
     else:
         # modo "auto": fallback para IA se confiança baixa
-        texto_longo = len(texto) > PARSER_MAX_CHARS_FALLBACK
         if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+            # 1) tenta fallback local (se habilitado) antes de gastar API externa
+            if LOCAL_LLM_ENABLED:
+                try:
+                    ficha_local = await tentar_fallback_llm_local(texto, num_docs)
+                    if ficha_local and ficha_local.startswith("## FICHA"):
+                        logger.info("LLM local usado (sem API externa).", extra={"request_id": "-"})
+                        _stats["total_analises"] += 1
+                        p = _stats["por_provedor"].setdefault(
+                            "llm-local",
+                            {"analises": 0, "tokens": 0, "custo_usd": 0.0},
+                        )
+                        p["analises"] += 1
+                        return ficha_local
+                except HTTPException as e:
+                    logger.info("LLM local indisponivel: %s", e.detail, extra={"request_id": "-"})
+                except Exception as e:
+                    logger.warning("Erro no LLM local: %s", e, extra={"request_id": "-"})
+
+            # 2) fallback API (com truncamento quando necessário)
             if texto_longo:
                 corte = int(PARSER_MAX_CHARS_FALLBACK * 0.60)
-                texto_api = texto[:corte] + "\n\n[...trecho omitido...]\n\n" + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
-                print(
-                    f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%), doc longo "
-                    f"({len(texto)} chars) — truncado para fallback API."
+                texto_api = (
+                    texto[:corte]
+                    + "\n\n[...trecho omitido...]\n\n"
+                    + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
+                )
+                logger.info(
+                    "Confiança baixa (%s%%), doc longo (%s chars) — truncado para fallback API.",
+                    resultado.get("confianca", 0),
+                    len(texto),
+                    extra={"request_id": "-"},
                 )
             else:
                 texto_api = texto
-                print(f"[PARSER] Confiança baixa ({resultado.get('confianca', 0)}%). Usando fallback API.")
+                logger.info(
+                    "Confiança baixa (%s%%). Usando fallback por API.",
+                    resultado.get("confianca", 0),
+                    extra={"request_id": "-"},
+                )
             return await chamar_groq(texto_api, num_docs)
 
-    # enriquecimento: BrasilAPI CNPJ → razão social oficial
+    if resultado.get("usar_fallback_api") and texto_longo and (modo == "parser" or not PARSER_FALLBACK_API):
+        logger.info(
+            "Documento longo demais para fallback automático; mantendo saída do parser local.",
+            extra={"request_id": "-"},
+        )
+    # enriquecimento: BrasilAPI CNPJ â†’ razÃ£o social oficial
     cnpj_extraido = resultado.get("cnpj", "")
     if _is_identificado(cnpj_extraido):
         dados_cnpj = await _enriquecer_cnpj(cnpj_extraido)
         if dados_cnpj:
             razao = (dados_cnpj.get("razao_social") or "").strip()
             orgao_atual = resultado.get("orgao", "")
-            # usa razão social oficial quando: (a) orgão não identificado,
-            # (b) orgão tem mais de 10 palavras (capturou contexto demais),
-            # (c) orgão contém artefatos de tabela PDF ("PROJETO:", "INFORMAÇÕES")
+            # usa razÃ£o social oficial quando: (a) orgÃ£o nÃ£o identificado,
+            # (b) orgÃ£o tem mais de 10 palavras (capturou contexto demais),
+            # (c) orgÃ£o contÃ©m artefatos de tabela PDF ("PROJETO:", "INFORMAÃ‡Ã•ES")
             orgao_ruim = (
                 not _is_identificado(orgao_atual)
                 or len(orgao_atual.split()) > 10
-                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÇÕES", "ORIENTADA"))
+                or any(s in orgao_atual.upper() for s in ("PROJETO:", "INFORMAÃ‡Ã•ES", "ORIENTADA"))
             )
             if razao and orgao_ruim:
                 resultado["orgao"] = razao.title()
                 resultado["ficha"] = gerar_ficha(resultado)
-                print(f"[CNPJ] Órgão enriquecido: {razao[:80]}")
-
+                logger.info("Ã“rgÃ£o enriquecido via CNPJ: %s", razao[:80], extra={"request_id": "-"})
     _registrar_uso_parser_local(int(resultado.get("confianca", 0)))
     return resultado["ficha"]
 
 
-@app.get("/status")
+@app.get("/status", response_class=HTMLResponse)
 async def status():
-    return {
-        "ok": True,
-        "versao": APP_VERSION_LABEL,
-        "commit": APP_COMMIT_LABEL,
-        "deploy": APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else None,
-        "analises_hoje": _stats["analises_hoje"],
-        "total_analises": _stats["total_analises"],
-        "historico_n": len(_historico),
-        "limite_diario": LIMITE_DIARIO,
-        "data_reset": _stats["hoje"],
-    }
-
-@app.get("/_html_status_legacy")
-async def _html_status_legacy():
     total   = _stats["total_analises"]
     hoje    = _stats["analises_hoje"]
     hist_n  = len(_historico)
-    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "não informado"
+    deploy_label = APP_DEPLOYED_AT.strip() if APP_DEPLOYED_AT else "nÃ£o informado"
     data_reset = _stats["hoje"]
 
-    return f"""<!DOCTYPE html>
+    response = HTMLResponse(f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1433,27 +2500,27 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 <main>
   <div class="page-header">
     <h1 class="page-title">Status do sistema</h1>
-    <p class="page-sub">Sessão atual &nbsp;·&nbsp; Reseta em: {data_reset}</p>
+    <p class="page-sub">SessÃ£o atual &nbsp;·&nbsp; Reseta em: {data_reset}</p>
   </div>
 
   <div class="grid g4">
     <div class="card">
       <div class="stat-label">Análises hoje</div>
       <div class="stat-val">{hoje}</div>
-      <div class="stat-sub">análises processadas hoje</div>
+      <div class="stat-sub">anÃ¡lises processadas hoje</div>
     </div>
     <div class="card">
-      <div class="stat-label">Total na sessão</div>
+      <div class="stat-label">Total na sessÃ£o</div>
       <div class="stat-val">{total}</div>
-      <div class="stat-sub">análises realizadas</div>
+      <div class="stat-sub">anÃ¡lises realizadas</div>
     </div>
     <div class="card">
-      <div class="stat-label">Histórico salvo</div>
+      <div class="stat-label">HistÃ³rico salvo</div>
       <div class="stat-val">{hist_n}</div>
-      <div class="stat-sub">análises no arquivo</div>
+      <div class="stat-sub">anÃ¡lises no arquivo</div>
     </div>
     <div class="card">
-      <div class="stat-label">Versão vigente</div>
+      <div class="stat-label">VersÃ£o vigente</div>
       <div class="stat-val-sm">{APP_VERSION_LABEL}</div>
       <div class="stat-sub">commit {APP_COMMIT_LABEL} · deploy {deploy_label}</div>
     </div>
@@ -1463,42 +2530,48 @@ main{{max-width:960px;margin:0 auto;padding:32px 24px 64px}}
 </main>
 <script>setTimeout(()=>location.reload(),30000);</script>
 </body>
-</html>"""
+</html>""")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.post("/importar/arquivo")
-async def importar_arquivo(arquivos: list[UploadFile] = File(...)):
+async def importar_arquivo(request: Request, arquivos: list[UploadFile] = File(...)):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
+    _audit("importar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
     importados, ignorados = [], []
     for arq in arquivos:
         conteudo = await arq.read()
         try:
             texto = extrair_texto(arq.filename, conteudo)
         except Exception as e:
-            ignorados.append({"arquivo": arq.filename, "motivo": f"erro ao ler: {e}"})
+            _audit("importar_arquivo_read_error", request.state.request_id, arquivo=arq.filename, erro=str(e))
+            ignorados.append({"arquivo": arq.filename, "motivo": "erro ao ler: " + str(e)})
             continue
         texto = (texto or "").strip()
         if not texto:
             ignorados.append({"arquivo": arq.filename, "motivo": "nenhum texto extraído do arquivo"})
             continue
-        # já em markdown → usa direto; texto puro → envolve com cabeçalho
         if "## FICHA" in texto:
             ficha = texto[texto.find("## FICHA"):]
         else:
             ficha = "## FICHA DE LICITAÇÃO\n\n" + texto
-        registrar_analise(ficha)
+        registrar_analise(ficha, arquivos_raw=[(arq.filename, conteudo)], fonte="importacao")
         importados.append(arq.filename)
+    _audit("importar_arquivo_done", request.state.request_id, importados=len(importados), ignorados=len(ignorados))
     return {"importados": importados, "ignorados": ignorados}
 
 
 @app.post("/importar/texto")
-async def importar_texto(request: AnalisarRequest):
+async def importar_texto(http_request: Request, request: AnalisarRequest):
     texto = request.texto.strip()
     if not texto:
         raise HTTPException(400, "Texto vazio.")
+    _audit("importar_texto_start", http_request.state.request_id, chars=len(texto), num_docs=request.num_docs)
     ficha = texto[texto.find("## FICHA"):] if "## FICHA" in texto else "## FICHA DE LICITAÇÃO\n\n" + texto
     registrar_analise(ficha)
+    _audit("importar_texto_done", http_request.state.request_id, chars=len(texto), num_docs=request.num_docs)
     return {"ok": True}
 
 
@@ -1518,17 +2591,52 @@ async def get_historico():
 async def get_ficha_historico(id: str):
     for r in _historico:
         if r["id"] == id:
-            return {
-                "id": r["id"],
-                "timestamp": r.get("timestamp"),
-                "orgao": r.get("orgao"),
-                "valor": r.get("valor"),
-                "objeto": r.get("objeto"),
-                "segmento": r.get("segmento"),
-                "score": r.get("score"),
-                "ficha": r.get("ficha"),
-            }
+            return {"ficha": r.get("ficha"), "orgao": r.get("orgao"), "segmento": r.get("segmento"), "score": r.get("score"), "arquivos": r.get("arquivos", []), "fonte": r.get("fonte")}
     raise HTTPException(404, "Análise não encontrada.")
+
+
+@app.get("/historico/{id}/arquivos/{arquivo_id}")
+async def baixar_arquivo_historico(id: str, arquivo_id: str):
+    if _usa_supabase_api():
+        try:
+            for r in _historico:
+                if r.get("id") != id:
+                    continue
+                for arq in r.get("arquivos", []):
+                    if arq.get("id") == arquivo_id and arq.get("storage_path"):
+                        conteudo = _supabase_request(
+                            f"/storage/v1/object/{_SUPABASE_BUCKET}/{quote(arq['storage_path'], safe='/')}",
+                            method="GET",
+                            content_type=None,
+                            expect_json=False,
+                        )
+                        return Response(
+                            content=conteudo,
+                            media_type=arq.get("mime_type") or "application/octet-stream",
+                            headers={"Content-Disposition": f'attachment; filename="{arq.get("arquivo", "arquivo")}"'}
+                        )
+        except Exception:
+            logger.exception("Erro ao baixar arquivo via Supabase API", extra={"request_id": "-"})
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT nome_original, mime_type, conteudo
+                        FROM historico_arquivos
+                        WHERE analise_id = %s AND id = %s
+                    """, (id, arquivo_id))
+                    row = cur.fetchone()
+                    if row:
+                        nome, mime_type, conteudo = row
+                        return Response(
+                            content=bytes(conteudo),
+                            media_type=mime_type or "application/octet-stream",
+                            headers={"Content-Disposition": f'attachment; filename="{nome}"'}
+                        )
+        except Exception:
+            logger.exception("Erro ao baixar arquivo do hist?rico", extra={"request_id": "-"})
+    raise HTTPException(404, "Arquivo nÃ£o encontrado.")
 
 
 @app.get("/stats")
@@ -1545,17 +2653,86 @@ async def get_stats():
     }
 
 
-@app.get("/")
+@app.get("/api/storage-check")
+async def storage_check():
+    return _contar_registros_db()
+
+
+@app.get("/api/logs/recent")
+async def recent_logs(limit: int = 100):
+    limit = max(1, min(500, limit))
+    return {
+        "log": _ler_ultimas_linhas(LOG_FILE, limit),
+        "errors": _ler_ultimas_linhas(ERROR_LOG_FILE, limit),
+    }
+
+
+@app.post("/api/client-error")
+async def client_error(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    msg = str(data.get("message") or data.get("error") or "client error")
+    stack = str(data.get("stack") or "")
+    url = str(data.get("url") or "")
+    line = data.get("line")
+    col = data.get("col")
+    logger.error(
+        "ClientError %s",
+        json.dumps({"message": msg, "stack": stack, "url": url, "line": line, "col": col}, ensure_ascii=False),
+        extra={"request_id": "-"},
+    )
+    return {"ok": True}
+
+
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return {"app": "LicitaPRO API", "versao": APP_VERSION_LABEL, "frontend": _FRONTEND_URL}
+    html = _shell_html("editais", _server_editais_html())
+    response = HTMLResponse(html)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/editais")
+async def redirect_editais():
+    response = HTMLResponse(_shell_html("editais", _server_editais_html()))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/upload")
+async def redirect_upload():
+    response = HTMLResponse(_shell_html("upload", _server_upload_html()))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/historico-view")
+async def redirect_historico_view():
+    response = HTMLResponse(_shell_html("historico", _server_historico_html()))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/logs")
+async def redirect_logs():
+    response = HTMLResponse(_shell_html("logs", _server_logs_html()))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.post("/analisar/arquivo", response_model=AnalisarResponse)
-async def analisar_arquivo(arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
+async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
+    _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
 
-    # reset diário
     hoje = datetime.date.today().isoformat()
     if _stats["hoje"] != hoje:
         _stats["hoje"] = hoje
@@ -1564,41 +2741,57 @@ async def analisar_arquivo(arquivos: list[UploadFile] = File(...), modo: str = F
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
         raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")
 
-    textos = []
+    arquivos_raw: list[tuple[str, bytes]] = []
     for arq in arquivos:
-        conteudo = await arq.read()
         try:
-            texto = extrair_texto(arq.filename, conteudo)
+            conteudo = await arq.read()
         except Exception as e:
+            _audit("analisar_arquivo_read_error", request.state.request_id, arquivo=arq.filename, erro=str(e))
             raise HTTPException(400, f"Erro ao ler '{arq.filename}': {e}")
-        textos.append((arq.filename, texto))
+        arquivos_raw.append((arq.filename, conteudo))
 
-    cota = MAX_CHARS // len(textos)
-    partes = []
-    for nome, txt in textos:
-        if len(txt) <= cota:
-            trecho = txt
-        else:
-            # pega 60% do início (cabeçalho, objeto, datas, valor)
-            # e 40% do fim (itens, documentos, alertas)
-            inicio = int(cota * 0.60)
-            fim    = cota - inicio
-            trecho = txt[:inicio] + "\n\n[...]\n\n" + txt[-fim:]
-        partes.append(f"=== {nome} ===\n{trecho}")
-    texto_completo = "\n\n".join(partes)
+    try:
+        texto_completo, meta_arquivos = montar_texto_caso_classificado_raw(arquivos_raw)
+    except Exception as e:
+        _audit("analisar_arquivo_process_error", request.state.request_id, erro=str(e))
+        raise HTTPException(400, f"Erro ao processar arquivos enviados: {e}")
+
+    if len(texto_completo) > MAX_CHARS:
+        cota = MAX_CHARS // max(1, len(meta_arquivos))
+        partes = []
+        for nome, conteudo in arquivos_raw:
+            try:
+                _, texto = extrair_texto_com_tipo(nome, conteudo)
+            except Exception as e:
+                raise HTTPException(400, f"Erro ao ler '{nome}': {e}")
+            texto = texto or ""
+            if len(texto) <= cota:
+                trecho = texto
+            else:
+                inicio = int(cota * 0.60)
+                fim = cota - inicio
+                trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
+            partes.append(f"=== {nome} ===\n{trecho}")
+        texto_completo = "\n\n".join(partes)
     ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
     _stats["analises_hoje"] += 1
-    registrar_analise(ficha)
+    registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
+    _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
     return AnalisarResponse(ficha=ficha)
 
 
 @app.post("/analisar", response_model=AnalisarResponse)
-async def analisar(request: AnalisarRequest):
+async def analisar(http_request: Request, request: AnalisarRequest):
+    _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
     registrar_analise(ficha)
+    _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     return AnalisarResponse(ficha=ficha)
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+

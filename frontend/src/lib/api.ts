@@ -68,3 +68,11 @@ export async function getStats(): Promise<StatsResponse> {
 export async function reclassificar(): Promise<{ atualizados: number; total: number }> {
   return request('/api/reclassificar', { method: 'POST' })
 }
+
+export async function getLogs(limit = 100): Promise<{ log: string[]; errors: string[] }> {
+  return request(`/api/logs/recent?limit=${limit}`)
+}
+
+export function urlArquivo(analiseId: string, arquivoId: string): string {
+  return `${BASE}/historico/${analiseId}/arquivos/${arquivoId}`
+}

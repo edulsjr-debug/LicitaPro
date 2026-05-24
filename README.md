@@ -110,6 +110,29 @@ O OCR e aplicado no proprio processo de upload, sem etapa manual.
 
 ---
 
+## Fallback local (LLM local via Ollama)
+
+Quando a confianca do parser local for baixa, o sistema pode tentar um **LLM local** antes de gastar API externa (modo `auto`).
+
+Variaveis:
+
+```env
+LOCAL_LLM_ENABLED=true
+LOCAL_LLM_PROVIDER=ollama
+LOCAL_LLM_BASE_URL=http://127.0.0.1:11434
+LOCAL_LLM_MODEL=llama3.1:8b
+```
+
+Passos (Windows):
+
+```bash
+# instalar Ollama (app) e depois:
+ollama pull llama3.1:8b
+ollama serve
+```
+
+---
+
 ## Instalação local
 
 **Pré-requisitos:** Python 3.9+
@@ -146,6 +169,20 @@ Acesse: **http://localhost:8000**
 
 ---
 
+## Medição do parser (sem IA)
+
+Para medir o que o parser extrai hoje (sem mascarar com IA), rode:
+
+```bash
+python tests/run_fixtures.py --editais-dir C:/Users/lisia/Desktop/editais --report tests/relatorio_por_pasta.json
+python tests/generate_relatorio_precisao_md.py --in tests/relatorio_por_pasta.json --out tests/relatorio_precisao.md
+python tests/reports/build_all_reports.py
+```
+
+Os PDFs ficam em `tests/reports/pdf/` (um por pasta/caso).
+
+---
+
 ## Ambientes
 
 | Ambiente | URL | Branch | Canal |
@@ -163,11 +200,24 @@ Ambos podem ser monitorados pelo **UptimeRobot** a cada 5 minutos para evitar hi
 
 O histórico de análises é persistido no **Supabase PostgreSQL** — não se perde em redeploys.
 
-- Tabela: `historico` (campo `id` TEXT PRIMARY KEY, `dados` JSONB)
-- Na primeira inicialização com `DATABASE_URL` configurada, o sistema migra automaticamente o `historico.json` local para o banco
-- Sem `DATABASE_URL`, funciona em modo local com `historico.json` como fallback
+- Preferencialmente via API do Supabase:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY` ou `SUPABASE_SECRET_KEY`
+  - `SUPABASE_STORAGE_BUCKET` (padrão: `licitapro-uploads`)
+- O backend grava:
+  - `historico` com o JSON completo da análise
+  - arquivos originais no Supabase Storage, com metadados no histórico
+- `DATABASE_URL` continua como fallback legado para quem ainda usa conexão direta
+- Na primeira inicialização com o banco configurado, o sistema migra o `historico.json` local quando houver dados pendentes
 
 Variável de ambiente necessária:
+```
+SUPABASE_URL=https://[PROJECT_REF].supabase.co
+SUPABASE_SERVICE_ROLE_KEY=[SUA_CHAVE_SECRETA]
+SUPABASE_STORAGE_BUCKET=licitapro-uploads
+```
+
+Se você preferir manter a conexão direta ao Postgres, a URL antiga continua suportada como fallback:
 ```
 DATABASE_URL=postgresql://postgres:[SENHA]@db.[PROJETO].supabase.co:5432/postgres?sslmode=require
 ```
@@ -213,7 +263,10 @@ O repositório já inclui `render.yaml` configurado com dois serviços:
 | `APP_COMMIT` | Commit curto do build atual |
 | `APP_DEPLOYED_AT` | Data/hora do deploy, se informada |
 | `PARSER_MAX_CHARS_FALLBACK` | Tamanho máximo do texto para permitir fallback por API |
-| `DATABASE_URL` | Connection string do Supabase (PostgreSQL) |
+| `SUPABASE_URL` | URL do projeto Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Chave secreta server-side do Supabase |
+| `SUPABASE_STORAGE_BUCKET` | Bucket para arquivos originais |
+| `DATABASE_URL` | Connection string legada do Supabase (PostgreSQL) |
 
 **Passos para novo ambiente:**
 1. Acesse [render.com](https://render.com) -> **New -> Web Service**
@@ -235,6 +288,8 @@ O repositório já inclui `render.yaml` configurado com dois serviços:
 | POST | `/analisar` | Analisa texto direto (JSON) |
 | GET | `/historico` | Lista todo o histórico |
 | GET | `/historico/{id}` | Retorna ficha de uma análise |
+| GET | `/historico/{id}/arquivos/{arquivo_id}` | Baixa o arquivo original preservado |
+| GET | `/api/logs/recent` | Retorna as últimas linhas do log local e de erros |
 | POST | `/importar/arquivo` | Importa fichas prontas via arquivo |
 | POST | `/importar/texto` | Importa ficha via texto colado |
 | POST | `/api/reclassificar` | Reclassifica segmentos do histórico |

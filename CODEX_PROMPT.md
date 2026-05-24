@@ -2,175 +2,190 @@
 
 ## Contexto
 
-O LicitaPRO é uma aplicação que analisa editais de licitação pública usando IA.
-O backend é FastAPI (Python) e está em produção em `https://licitapro-0brh.onrender.com`.
-O frontend será Next.js 15 na pasta `frontend/` deste repositório.
+O LicitaPRO analisa editais de licitação pública com IA.
+Backend: FastAPI (Python) em `https://licitapro-dev.onrender.com` (branch dev).
+Frontend: Next.js 15 na pasta `frontend/` deste repositório.
 
-A estrutura já foi criada. Você precisa implementar todos os componentes e páginas.
+A estrutura de arquivos, tipos e API client já foram criados. Implemente os componentes e páginas.
 
 ## Stack do frontend
 - Next.js 15, App Router, TypeScript
 - Tailwind CSS
-- `react-markdown` + `remark-gfm` para renderizar o resultado da análise (Markdown)
+- `react-markdown` + `remark-gfm` para renderizar análises em Markdown
 - `clsx` para classes condicionais
-- API client já pronto em `frontend/src/lib/api.ts`
-- Tipos já prontos em `frontend/src/lib/types.ts`
+- API client pronto em `frontend/src/lib/api.ts`
+- Tipos prontos em `frontend/src/lib/types.ts`
 
 ## Design de referência
 
-O app atual tem este visual (extraído do HTML original):
-- Fundo cinza claro `#f8f9fb`
-- Cards brancos com borda `#e5e7eb` e sombra sutil
-- Cor primária: `#6366f1` (indigo)
-- Fonte: sistema (-apple-system, Segoe UI)
-- Navbar fixa com logo "Licita**PRO**" + links de navegação
-- Estilo limpo, similar a Linear/Notion/Vercel
+Visual atual do app (extraído do HTML em produção):
+- Fundo: `#f8f9fb`
+- Cards brancos com borda `#e5e7eb`, sombra sutil
+- Cor primária: `#6366f1` (indigo) — botões, links ativos, destaques
+- Sidebar fixa à esquerda (desktop) com logo e navegação
+- Em mobile: navbar horizontal no topo
+- Estilo limpo, similar ao Linear / Vercel
 
-## Navbar (componente compartilhado)
+---
 
-Criar `frontend/src/components/Navbar.tsx`:
-- Sticky no topo, fundo branco com backdrop-blur
-- Logo "Licita**PRO**" (PRO em indigo)
-- Links de navegação: "Dashboard" `/`, "Novo edital" `/novo`, "Histórico" `/historico`
-- Link ativo destacado
-- Badge com versão da API (buscar de `/stats` com `use client` + `useEffect`, opcional)
+## Layout principal
 
-## Página 1: Dashboard (`/`)
+Criar `frontend/src/components/AppShell.tsx` com:
 
-Arquivo: `frontend/src/app/page.tsx`
+**Sidebar (desktop, 220px, fixa):**
+- Logo "Licita**PRO**" no topo
+- Links de navegação com ícones:
+  - "Editais" `/` (ícone: lista)
+  - "Novo edital" `/novo` (ícone: +)
+  - "Histórico" `/historico` (ícone: relógio)
+  - "Logs" `/logs` (ícone: terminal)
+- Link ativo destacado com fundo indigo-50 e texto indigo-700
+- Versão do app no rodapé da sidebar (buscar de `/stats`)
 
-**Deve ser `'use client'`** — busca dados da API no carregamento.
+**Conteúdo principal:** `max-w-5xl`, padding 32px
 
-**Seção 1 — Cards de stats** (grid 4 colunas, 2 em mobile):
-- Busca `GET /stats` da API
-- Cards:
-  - "Análises hoje" → `analises_hoje` (número grande)
-  - "Total de análises" → `total_analises`
-  - "Score médio" → `score_medio` com barra de progresso colorida (verde ≥70, amarelo 40-69, vermelho <40)
-  - "Custo estimado" → `custo_usd_total` formatado como "US$ 0,0042"
+**Mobile:** sidebar vira bottom nav ou hamburger menu
 
-**Seção 2 — Últimas análises** (as 5 mais recentes do histórico):
-- Busca `GET /historico`
-- Mostra cards compactos com: órgão, objeto (truncado 80 chars), segmento (badge colorido), score (badge), data relativa (ex: "há 2 horas")
-- Cada card é clicável → navega para `/historico/[id]`
-- Link "Ver todas" → `/historico`
+Atualizar `frontend/src/app/layout.tsx` para usar `AppShell`.
 
-**Loading state:** skeleton com animação pulse
-**Erro:** mensagem amigável com botão de retry
+---
+
+## Página 1: Editais / Dashboard (`/`)
+
+`frontend/src/app/page.tsx` — `'use client'`
+
+**Busca:** `GET /stats` e `GET /historico`
+
+**Seção stats** (grid 4 colunas → 2 em tablet → 1 em mobile):
+- "Análises hoje" com limite visual (`{analises_hoje} / {limite_diario}`)
+- "Total salvo" → `historico_n`
+- "Alta viabilidade" → count de score >= 75
+- "Score médio" → `score_medio` com cor (verde >=70, amarelo 40-69, vermelho <40)
+
+**Lista de editais recentes** (últimos 10):
+- Cada item: órgão (bold), objeto (2 linhas, ellipsis), badge segmento, badge score, data relativa
+- Clicável → `/historico/[id]`
+- Link "Ver todos" → `/historico`
+
+**Botão "Novo edital"** em destaque no header da página
+
+---
 
 ## Página 2: Novo edital (`/novo`)
 
-Arquivo: `frontend/src/app/novo/page.tsx`
+`frontend/src/app/novo/page.tsx` — `'use client'`
 
-**Deve ser `'use client'`**
+### Etapa 1 — Upload
 
-**Fluxo em 2 etapas:**
-
-### Etapa 1 — Upload/Input
-
-**Dropzone** (componente principal):
+**Dropzone:**
 - Área de drag-and-drop para PDF, DOCX, XLSX, TXT
-- Aceita múltiplos arquivos simultaneamente
-- Lista os arquivos adicionados com nome, tamanho e botão de remover
-- Clique na área também abre o seletor de arquivos
-- Estados visuais: idle, dragover (borda indigo, fundo indigo-50), arquivos adicionados
+- Aceita múltiplos arquivos
+- Lista arquivos com nome, tamanho (ex: "2,4 MB") e botão remover (x)
+- Clique abre o file picker
+- Estados visuais: idle, dragover (borda indigo), com arquivos
 
-**Seletor de modo** (visível após adicionar arquivo):
-- 3 botões: "Auto" | "Código" | "IA"
-- "Auto" = selecionado por padrão (usa parser local + fallback para IA)
-- "Código" = apenas parser local, sem IA
-- "IA" = envia direto para IA
-- Tooltip/descrição abaixo de cada opção
+**Seletor de modo** (aparece após selecionar arquivo):
+- 3 botões: Auto (padrão) | Código | IA
+- Auto = parser local + fallback IA; Código = só parser; IA = direto para IA
 
-**Botão "Analisar edital"**:
-- Visível após selecionar arquivo
-- Ao clicar: chama `POST /analisar/arquivo` com os arquivos e modo
-- Estado de loading: spinner + "Analisando..." (pode demorar 15-30s)
+**Botão "Analisar edital"** (full-width, indigo):
+- Loading: spinner + "Analisando… pode levar até 30s"
+- Chama `POST /analisar/arquivo` com FormData (campo `arquivos` + campo `modo`)
 
-### Etapa 2 — Resultado
+### Etapa 2 — Resultado (mesma página, sem navegar)
 
-Quando a análise retorna, mostrar na mesma página (sem navegar):
-- Botão "← Nova análise" para voltar à etapa 1
-- Botão "Copiar ficha" (copia o markdown para clipboard)
-- Botão "Ver no histórico" → `/historico` 
-- Renderização do markdown da `ficha` usando `react-markdown` com `remark-gfm`
-  - Aplicar className `ficha-md` (estilos já definidos em globals.css)
-  - Renderizar tabelas, blockquotes, listas corretamente
+Quando a resposta chega:
+- Botão "← Nova análise" (volta para etapa 1)
+- Botão "Copiar ficha" (copia markdown para clipboard)
+- Score badge grande + segmento detectado
+- Renderização da `ficha` com `<FichaMarkdown>`
 
-**Formato da resposta da API:**
+Criar `frontend/src/lib/utils.ts` com:
 ```typescript
-{ ficha: string } // markdown da análise
+export function extrairScore(ficha: string): number {
+  const m = ficha.match(/Score[^:]*:\*?\*?\s*(\d+)\/100/) || ficha.match(/\*\*Score:\*\*\s*(\d+)/)
+  return m ? Math.min(100, Math.max(0, parseInt(m[1]))) : 0
+}
+export function formatarData(iso: string): string // "24/05/2026 às 03:15"
+export function dataRelativa(iso: string): string // "há 2 horas"
+export function formatarBytes(bytes: number): string // "2,4 MB"
 ```
+
+---
 
 ## Página 3: Histórico (`/historico`)
 
-Arquivo: `frontend/src/app/historico/page.tsx`
+`frontend/src/app/historico/page.tsx` — `'use client'`
 
-**Deve ser `'use client'`**
+**Busca:** `GET /historico`
 
-**Busca** `GET /historico` → retorna `{ historico: HistoricoItem[] }`
+**Barra de filtros:**
+- Busca por texto (orgao + objeto)
+- Select: segmento (Todos + cada segmento)
+- Select: score (Todos / >=70 Alta / 40-69 Média / <40 Baixa)
 
-**Filtros** (barra acima da lista):
-- Campo de busca por texto (filtra em orgao + objeto)
-- Select de segmento (todos os segmentos + "Todos")
-- Select de score (Todos / Alto ≥70 / Médio 40-69 / Baixo <40)
-
-**Lista de análises** (cards):
-Cada card contém:
-- Score badge (canto superior direito, colorido)
-- Órgão (título, bold)
-- Objeto (2 linhas, truncado com ellipsis)
-- Badge de segmento (colorido por categoria)
-- Data/hora (ex: "24/05/2026 às 03:15")
-- Valor estimado (se disponível)
+**Lista agrupada por dia:**
+- Cabeçalho de grupo: "Hoje", "Ontem", ou data (ex: "23/05/2026")
+- Cards: órgão, objeto (2 linhas), badge segmento, badge score, hora (HH:MM)
 - Clique → `/historico/[id]`
 
-**Cores dos segmentos** (badges):
-- Saúde: verde
-- Educação: azul
-- Obras e Infraestrutura: laranja
-- Alimentação: amarelo
-- Tecnologia e TI: indigo
-- Transporte: cinza
-- Segurança: vermelho
-- Outros: cinza neutro
+**Estado vazio:** "Nenhuma análise ainda" + link para `/novo`
 
-**Estado vazio:** mensagem "Nenhuma análise ainda" com link para `/novo`
+---
 
-## Página 4: Detalhe da análise (`/historico/[id]`)
+## Página 4: Detalhe (`/historico/[id]`)
 
-Arquivo: `frontend/src/app/historico/[id]/page.tsx`
+`frontend/src/app/historico/[id]/page.tsx` — `'use client'`
 
-**Deve ser `'use client'`**
-
-**Busca** `GET /historico/[id]` → retorna `HistoricoDetalhe`
+**Busca:** `GET /historico/[id]`
 
 **Layout:**
-- Botão "← Histórico" (volta)
-- Header: órgão (título grande), badge segmento, badge score, data
-- Objeto em destaque (card cinza claro)
-- Valor estimado
-- Botão "Copiar ficha" 
-- Seção da ficha completa em Markdown (`ficha-md`)
+- Breadcrumb: Histórico → {orgão}
+- Header: órgão (título), badges segmento + score, data/hora
+- Card cinza com objeto em destaque
+- Arquivos anexados (se houver): lista com link de download → `GET /historico/[id]/arquivos/[arquivo_id]`
+- Botão "Copiar ficha"
+- Renderização completa do markdown com `<FichaMarkdown>`
 
-**Loading:** skeleton
-**404:** mensagem "Análise não encontrada"
+---
+
+## Página 5: Logs (`/logs`)
+
+`frontend/src/app/logs/page.tsx` — `'use client'`
+
+**Busca:** `GET /api/logs/recent?limit=100`
+
+Resposta: `{ log: string[], errors: string[] }`
+
+**Layout:**
+- Dois painéis: "Log geral" e "Erros"
+- Cada painel: `<pre>` com fonte mono, scroll, fundo escuro (#1e1e2e) + texto claro
+- Botão "Atualizar" (refetch)
+- Auto-refresh a cada 30s com countdown visível
+
+---
 
 ## Componentes a criar
 
+### `frontend/src/components/AppShell.tsx`
+Layout com sidebar + área de conteúdo — ver seção Layout acima.
+
 ### `frontend/src/components/ScoreBadge.tsx`
-Recebe `score: number`. 
-- ≥70 → fundo verde-100, texto verde-700, "Alta"
-- 40-69 → fundo amarelo-100, texto amarelo-700, "Média"  
-- <40 → fundo vermelho-100, texto vermelho-700, "Baixa"
+Recebe `score: number`.
+- >=70: fundo verde-100, texto verde-700, label "Alta"
+- 40-69: fundo amarelo-100, texto amarelo-700, label "Média"
+- <40: fundo vermelho-100, texto vermelho-700, label "Baixa"
 - Formato: "85 · Alta"
 
 ### `frontend/src/components/SegmentoBadge.tsx`
-Recebe `segmento: string`. Mapa de cor por segmento (ver cores acima).
+Cores por segmento:
+- Saúde → verde, Educação → azul, Obras → laranja, Alimentação → amarelo
+- TI → indigo, Transporte → cinza-azul, Segurança → vermelho
+- Limpeza → teal, Mobiliário → marrom, Viagens → roxo, Outros → cinza
 
 ### `frontend/src/components/FichaMarkdown.tsx`
-Recebe `ficha: string`.
 ```tsx
+'use client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 export function FichaMarkdown({ ficha }: { ficha: string }) {
@@ -183,23 +198,23 @@ export function FichaMarkdown({ ficha }: { ficha: string }) {
 ```
 
 ### `frontend/src/components/Skeleton.tsx`
-Componente de skeleton para loading states. Recebe `className`.
+Retângulo cinza animado (pulse). Aceita `className`.
+
+---
 
 ## Variável de ambiente
 
-`NEXT_PUBLIC_API_URL` = URL da API do Render.
-Já usada em `frontend/src/lib/api.ts`.
+`NEXT_PUBLIC_API_URL` = URL da API (já referenciado em `lib/api.ts`)
 
-## O que NÃO fazer
-- Não criar autenticação (app é público)
-- Não criar rota `/status` (já existe na API em JSON)
-- Não usar bibliotecas de UI externas além das listadas (sem shadcn, sem chakra)
-- Não criar backend — a API Python já existe
+## Não fazer
+- Sem autenticação
+- Sem bibliotecas UI externas (sem shadcn, chakra, MUI)
+- Não criar backend
 
-## Ordem sugerida de implementação
-1. `Navbar.tsx`
-2. `ScoreBadge.tsx`, `SegmentoBadge.tsx`, `Skeleton.tsx`, `FichaMarkdown.tsx`
-3. Página `/novo` (mais importante — core do produto)
-4. Página `/historico`
-5. Página `/historico/[id]`
-6. Página `/` (dashboard)
+## Ordem sugerida
+1. `AppShell.tsx` + atualizar `layout.tsx`
+2. Componentes base: `ScoreBadge`, `SegmentoBadge`, `FichaMarkdown`, `Skeleton`, `lib/utils.ts`
+3. Página `/novo` (core do produto)
+4. Página `/historico` e `/historico/[id]`
+5. Página `/` (editais/dashboard)
+6. Página `/logs`
