@@ -67,6 +67,7 @@ function StatusLed({ ok, label }: { ok: boolean | null; label: string }) {
   )
   return (
     <Tooltip
+      align="left"
       content={
         <span>
           {label}:{' '}
@@ -92,10 +93,7 @@ function SidebarFooter({ status }: { status: ServiceStatus }) {
       </div>
       <div className="space-y-0.5">
         <p className="font-mono text-[10px] text-gray-400">
-          back {status.versao ?? '—'} · {status.commit ?? '—'}
-        </p>
-        <p className="font-mono text-[10px] text-gray-400">
-          front {FRONT_COMMIT}
+          back {status.commit ?? '—'} · front {FRONT_COMMIT}
         </p>
       </div>
     </div>
