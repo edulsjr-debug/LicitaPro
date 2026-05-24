@@ -7,7 +7,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
+import queue as _queue_module
 import re
+import threading as _threading_module
 import time
 import uuid
 import urllib.error
@@ -94,6 +96,66 @@ def _configure_logging():
 
 _configure_logging()
 logger = logging.getLogger("licitapro")
+
+# Buffer de erros em memória — populado pelo handler abaixo e carregado do Supabase no boot
+_error_buffer: list[str] = []
+_ERROR_BUFFER_MAX = 500
+
+# Fila para gravação assíncrona no Supabase (worker thread separado)
+_log_queue: _queue_module.Queue = _queue_module.Queue(maxsize=2000)
+
+
+def _log_worker():
+    while True:
+        try:
+            item = _log_queue.get(timeout=30)
+            if item is None:
+                break
+            nivel, mensagem, request_id = item
+            try:
+                # _usa_supabase_api e _supabase_request definidos mais abaixo no módulo —
+                # resolvidos em tempo de chamada, não de definição
+                if not _usa_supabase_api():  # type: ignore[name-defined]
+                    continue
+                payload = json.dumps(
+                    {"nivel": nivel, "mensagem": mensagem[:2000], "request_id": request_id},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                _supabase_request("/rest/v1/logs", method="POST", body=payload)  # type: ignore[name-defined]
+            except Exception:
+                pass
+        except _queue_module.Empty:
+            pass
+        except Exception:
+            pass
+
+
+_log_thread = _threading_module.Thread(target=_log_worker, daemon=True, name="supabase-log-worker")
+_log_thread.start()
+
+
+class _SupabaseLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord):
+        try:
+            request_id = getattr(record, "request_id", "-")
+            ts = datetime.datetime.now().isoformat()[:19]
+            mensagem = record.getMessage()
+            entrada = f"[{ts}] [{record.levelname}] [{request_id}] {mensagem}"
+            _error_buffer.append(entrada)
+            if len(_error_buffer) > _ERROR_BUFFER_MAX:
+                _error_buffer.pop(0)
+            try:
+                _log_queue.put_nowait((record.levelname, mensagem[:2000], request_id))
+            except _queue_module.Full:
+                pass
+        except Exception:
+            pass
+
+
+_supabase_log_handler = _SupabaseLogHandler()
+_supabase_log_handler.setLevel(logging.WARNING)
+_supabase_log_handler.addFilter(_RequestIdFilter())
+logging.getLogger().addHandler(_supabase_log_handler)
 
 
 def _audit(event: str, request_id: str = "-", **fields):
@@ -1705,6 +1767,28 @@ def _migrar_se_necessario():
 
 _migrar_se_necessario()
 
+
+def _carregar_logs_supabase():
+    """Carrega logs recentes do Supabase para o buffer em memória no boot."""
+    global _error_buffer
+    if not _usa_supabase_api():
+        return
+    try:
+        data = _supabase_request(
+            "/rest/v1/logs?select=criado_em,nivel,request_id,mensagem&order=criado_em.desc&limit=500",
+            method="GET",
+        )
+        if isinstance(data, list):
+            _error_buffer = [
+                f"[{r.get('criado_em', '')[:19]}] [{r.get('nivel', '')}] [{r.get('request_id', '-')}] {r.get('mensagem', '')}"
+                for r in reversed(data)
+            ]
+    except Exception:
+        pass
+
+
+_carregar_logs_supabase()
+
 def _salvar_historico() -> bool:
     """Saves history; returns True if at least one backend succeeded."""
     if _usa_supabase_api():
@@ -2749,9 +2833,14 @@ async def storage_check():
 @app.get("/api/logs/recent")
 async def recent_logs(limit: int = 100):
     limit = max(1, min(500, limit))
+    file_log = _ler_ultimas_linhas(LOG_FILE, limit)
+    file_errors = _ler_ultimas_linhas(ERROR_LOG_FILE, limit)
+    # Merge buffer (Supabase/persistente) com logs do arquivo (sessão atual)
+    buffer_errors = _error_buffer[-limit:]
+    merged_errors = buffer_errors if buffer_errors else file_errors
     return {
-        "log": _ler_ultimas_linhas(LOG_FILE, limit),
-        "errors": _ler_ultimas_linhas(ERROR_LOG_FILE, limit),
+        "log": file_log,
+        "errors": merged_errors,
     }
 
 
@@ -2828,6 +2917,7 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
         raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")
 
+    # Leitura dos bytes (rápida — só lê o upload já em memória)
     arquivos_raw: list[tuple[str, bytes]] = []
     for arq in arquivos:
         try:
@@ -2837,36 +2927,57 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             raise HTTPException(400, f"Erro ao ler '{arq.filename}': {e}")
         arquivos_raw.append((arq.filename, conteudo))
 
-    try:
-        texto_completo, meta_arquivos = montar_texto_caso_classificado_raw(arquivos_raw)
-    except Exception as e:
-        _audit("analisar_arquivo_process_error", request.state.request_id, erro=str(e))
-        raise HTTPException(400, f"Erro ao processar arquivos enviados: {e}")
-
-    if len(texto_completo) > MAX_CHARS:
-        cota = MAX_CHARS // max(1, len(meta_arquivos))
-        partes = []
-        for nome, conteudo in arquivos_raw:
-            try:
-                _, texto = extrair_texto_com_tipo(nome, conteudo)
-            except Exception as e:
-                raise HTTPException(400, f"Erro ao ler '{nome}': {e}")
-            texto = texto or ""
-            if len(texto) <= cota:
-                trecho = texto
-            else:
-                inicio = int(cota * 0.60)
-                fim = cota - inicio
-                trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
-            partes.append(f"=== {nome} ===\n{trecho}")
-        texto_completo = "\n\n".join(partes)
-
-    _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
     request_id = request.state.request_id
     num_arquivos = len(arquivos)
-    chars = len(texto_completo)
+    _audit("analisar_arquivo_start", request_id, arquivos=num_arquivos)
 
     async def stream_com_keepalive():
+        loop = asyncio.get_event_loop()
+
+        # Keepalive imediato — resposta começa a fluir antes de qualquer extração de PDF
+        yield b"\n"
+
+        # Extração de texto (bloqueante: pdfplumber/docx/xlsx) — roda em thread pool
+        try:
+            texto_completo, meta_arquivos = await loop.run_in_executor(
+                None, montar_texto_caso_classificado_raw, arquivos_raw
+            )
+        except Exception as e:
+            logger.exception("Erro ao processar arquivos", extra={"request_id": request_id})
+            yield json.dumps({"error": f"Erro ao processar arquivos: {e}"}, ensure_ascii=False).encode() + b"\n"
+            return
+
+        yield b"\n"  # keepalive após extração
+
+        # Truncagem se necessário (também bloqueante)
+        if len(texto_completo) > MAX_CHARS:
+            def _truncar():
+                cota = MAX_CHARS // max(1, len(meta_arquivos))
+                partes = []
+                for nome, conteudo in arquivos_raw:
+                    try:
+                        _, texto = extrair_texto_com_tipo(nome, conteudo)
+                    except Exception as exc:
+                        raise RuntimeError(f"Erro ao ler '{nome}': {exc}")
+                    texto = texto or ""
+                    if len(texto) <= cota:
+                        trecho = texto
+                    else:
+                        inicio = int(cota * 0.60)
+                        fim = cota - inicio
+                        trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
+                    partes.append(f"=== {nome} ===\n{trecho}")
+                return "\n\n".join(partes), meta_arquivos
+
+            try:
+                texto_completo, meta_arquivos = await loop.run_in_executor(None, _truncar)
+            except Exception as e:
+                yield json.dumps({"error": str(e)}, ensure_ascii=False).encode() + b"\n"
+                return
+
+            yield b"\n"  # keepalive após truncagem
+
+        # Análise IA (potencialmente longa — keepalives a cada 10s)
         task = asyncio.create_task(analisar_com_fallback(texto_completo, num_arquivos, modo=modo))
         while not task.done():
             yield b"\n"
@@ -2876,15 +2987,18 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
                 pass
             except Exception:
                 pass
+
         if task.cancelled() or task.exception() is not None:
             exc = task.exception() if not task.cancelled() else None
             detail = getattr(exc, "detail", str(exc)) if exc else "Análise cancelada."
+            logger.error("Falha na análise: %s", detail, extra={"request_id": request_id})
             yield json.dumps({"error": detail}, ensure_ascii=False).encode() + b"\n"
             return
+
         ficha = task.result()
         _stats["analises_hoje"] += 1
         meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
-        _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=chars)
+        _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))
         yield json.dumps({"ficha": ficha, **meta}, ensure_ascii=False).encode() + b"\n"
 
     return StreamingResponse(
