@@ -1715,17 +1715,17 @@ def _salvar_historico():
         pass
 
 _SEGMENTOS = [
-    ("SaÃºde",                  ["saÃºde", "saude", "mÃ©dic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirÃºrgic", "farmÃ¡c", "farmac", "ambulatorial"]),
-    ("EducaÃ§Ã£o",               ["escola", "educaÃ§Ã£o", "educacao", "pedagÃ³g", "pedagogic", "didÃ¡tic", "ensino", "aluno", "professor", "material escolar", "creche"]),
-    ("Obras e Infraestrutura", ["obras", "construÃ§Ã£o", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elÃ©tric", "eletric", "hidrÃ¡ulic", "hidraulic", "saneamento"]),
-    ("AlimentaÃ§Ã£o",            ["aliment", "merenda", "refeiÃ§Ã£o", "refeicao", "gÃªneros alimentÃ­c", "generos aliment", "nutri", "cozinha", "marmita"]),
-    ("Tecnologia e TI",        ["software", "hardware", "computador", "informÃ¡tica", "informatica", "sistema", "licenÃ§a", "servidor", " ti ", "tecnologia da informaÃ§Ã£o", "impressora"]),
-    ("Transporte",             ["veÃ­culo", "veiculo", "frota", "combustÃ­vel", "combustivel", "Ã´nibus", "onibus", "manutenÃ§Ã£o veicular", "locaÃ§Ã£o de veÃ­culo", "locacao de veiculo"]),
-    ("Viagens e Passagens",    ["passagem aÃ©rea", "passagem aerea", "passagem Ã¡rea", "bilhete aÃ©reo", "bilhete aereo", "aÃ©reo", "aereo", "aÃ©rea", "aerea", "aviaÃ§Ã£o", "aviacao", "companhia aÃ©rea", "companhia aerea", "passagem", "hospedagem", "diÃ¡ria", "diaria", "hotel", "viagem"]),
-    ("Eventos e CapacitaÃ§Ã£o",  ["evento", "congresso", "capacitaÃ§Ã£o", "capacitacao", "treinamento", "curso", "palestra", "cerimÃ´nia", "cerimonia"]),
-    ("Limpeza e ConservaÃ§Ã£o",  ["limpeza", "higien", "conservaÃ§Ã£o predial", "conservacao predial", "jardinagem", "desinfeÃ§Ã£o", "desinfecao", "asseio", "zeladoria"]),
-    ("MobiliÃ¡rio e EscritÃ³rio",["mobiliÃ¡rio", "mobiliario", "mobÃ­lia", "mobilia", "escritÃ³rio", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritÃ³rio", "material de escritorio"]),
-    ("SeguranÃ§a",              ["seguranÃ§a", "seguranca", "vigilÃ¢ncia", "vigilancia", "monitoramento", "cÃ¢mera", "camera", "cctv", "alarme", "portaria"]),
+    ("Saúde",                    ["saude", "medic", "hospital", "medicament", "ubs", "enfermagem", "farmac", "ambulatorial"]),
+    ("Educação",                 ["escola", "educacao", "pedagogic", "ensino", "aluno", "professor", "material escolar", "creche"]),
+    ("Obras e Infraestrutura",   ["obras", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "eletric", "hidraulic", "saneamento"]),
+    ("Alimentação",              ["aliment", "merenda", "refeicao", "generos aliment", "nutri", "cozinha", "marmita"]),
+    ("Tecnologia e TI",          ["software", "hardware", "computador", "informatica", "sistema", "licenca", "servidor", " ti ", "tecnologia da informacao", "impressora"]),
+    ("Transporte",               ["veiculo", "frota", "combustivel", "onibus", "manutencao veicular", "locacao de veiculo"]),
+    ("Viagens e Passagens",      ["passagem aerea", "bilhete aereo", "aereo", "aerea", "aviacao", "companhia aerea", "passagem", "hospedagem", "diaria", "hotel", "viagem"]),
+    ("Eventos e Capacitação",    ["evento", "congresso", "capacitacao", "treinamento", "curso", "palestra", "cerimonia"]),
+    ("Limpeza e Conservação",    ["limpeza", "higien", "conservacao predial", "jardinagem", "desinfecao", "asseio", "zeladoria"]),
+    ("Mobiliário e Escritório",  ["mobiliario", "mobilia", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritorio"]),
+    ("Segurança",                ["seguranca", "vigilancia", "monitoramento", "camera", "cctv", "alarme", "portaria"]),
 ]
 
 def detectar_segmento(texto: str) -> str:
@@ -1800,6 +1800,16 @@ def _reclassificar_historico():
         if r.get("segmento") != novo:
             r["segmento"] = novo
             mudou = True
+        ficha = r.get("ficha", "")
+        if ficha:
+            novo_orgao = _extrair_orgao_ficha(ficha)
+            if r.get("orgao") != novo_orgao:
+                r["orgao"] = novo_orgao
+                mudou = True
+            novo_score = extrair_score(ficha)
+            if r.get("score") != novo_score:
+                r["score"] = novo_score
+                mudou = True
     if mudou:
         _salvar_historico()
 
@@ -2566,18 +2576,13 @@ async def importar_texto(http_request: Request, request: AnalisarRequest):
 @app.post("/api/reclassificar")
 async def api_reclassificar():
     antes = {r["id"]: (r.get("segmento"), r.get("orgao"), r.get("score")) for r in _historico}
-    _reclassificar_historico()
-    # re-extrai orgao e score de todos os registros que têm ficha
     for r in _historico:
         ficha = r.get("ficha", "")
-        if not ficha:
-            continue
-        orgao = _extrair_orgao_ficha(ficha)
-        score = extrair_score(ficha)
-        if not r.get("orgao") or r.get("orgao") in ("Não informado", "Não informado", "NÃ£o informado"):
-            r["orgao"] = orgao
-        if not r.get("score"):
-            r["score"] = score
+        texto = ficha or r.get("objeto", "")
+        r["segmento"] = detectar_segmento(texto)
+        if ficha:
+            r["orgao"] = _extrair_orgao_ficha(ficha)
+            r["score"] = extrair_score(ficha)
     _salvar_historico()
     atualizados = sum(
         1 for r in _historico
