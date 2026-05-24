@@ -2974,13 +2974,19 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     _limpar_jobs_expirados()
     _audit("analisar_arquivo_start", request_id, arquivos=num_arquivos, job_id=job_id)
 
+    def _prog(msg: str):
+        _jobs[job_id]["progresso"] = msg
+
     async def _processar():
         loop = asyncio.get_event_loop()
         try:
+            label = f"{num_arquivos} arquivo{'s' if num_arquivos > 1 else ''}"
+            _prog(f"Lendo e extraindo texto de {label}…")
             texto_completo, meta_arquivos = await loop.run_in_executor(
                 None, montar_texto_caso_classificado_raw, arquivos_raw
             )
             if len(texto_completo) > MAX_CHARS:
+                _prog("Texto muito longo — truncando para análise…")
                 def _truncar():
                     cota = MAX_CHARS // max(1, len(meta_arquivos))
                     partes = []
@@ -2994,7 +3000,10 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
                     return "\n\n".join(partes), meta_arquivos
                 texto_completo, meta_arquivos = await loop.run_in_executor(None, _truncar)
 
+            chars_k = len(texto_completo) // 1000
+            _prog(f"Analisando {chars_k} mil caracteres com IA… (pode levar alguns minutos)")
             ficha = await analisar_com_fallback(texto_completo, num_arquivos, modo=modo)
+            _prog("Salvando resultado…")
             _stats["analises_hoje"] += 1
             meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
             _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))

@@ -1,6 +1,6 @@
 'use client'
 
-import { DragEvent, useRef, useState } from 'react'
+import { DragEvent, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { analisarArquivos } from '@/lib/api'
 import type { Modo } from '@/lib/types'
@@ -21,6 +21,8 @@ export default function NovoPage() {
   const [modo, setModo] = useState<Modo>('auto')
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [progresso, setProgresso] = useState<string | null>(null)
+  const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [ficha, setFicha] = useState<string | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
@@ -42,9 +44,16 @@ export default function NovoPage() {
     addFiles(event.dataTransfer.files)
   }
 
+  useEffect(() => {
+    if (!loading) { setElapsed(0); return }
+    const t = window.setInterval(() => setElapsed((s) => s + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [loading])
+
   async function analisar() {
     if (!files.length || loading) return
     setLoading(true)
+    setProgresso(null)
     setError(null)
 
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -52,7 +61,7 @@ export default function NovoPage() {
     }
 
     try {
-      const response = await analisarArquivos(files, modo)
+      const response = await analisarArquivos(files, modo, setProgresso)
       setFicha(response.ficha)
       setAviso(response.aviso ?? null)
       setError(null)
@@ -74,6 +83,7 @@ export default function NovoPage() {
       }
     } finally {
       setLoading(false)
+      setProgresso(null)
     }
   }
 
@@ -223,13 +233,21 @@ export default function NovoPage() {
             type="button"
             onClick={analisar}
             disabled={loading}
-            className="mt-5 flex min-h-11 w-full items-center justify-center rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
+            className="mt-5 flex min-h-11 w-full flex-col items-center justify-center rounded-md bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {loading ? (
-              <span className="flex items-center gap-2">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Analisando... pode levar ate 30s
-              </span>
+              <>
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  {progresso ?? 'Iniciando análise…'}
+                </span>
+                <span className="mt-1 text-xs font-normal text-white/70">
+                  {elapsed < 60
+                    ? `${elapsed}s`
+                    : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`}
+                  {elapsed > 30 ? ' — processando, aguarde…' : ''}
+                </span>
+              </>
             ) : (
               'Analisar edital'
             )}

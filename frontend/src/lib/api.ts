@@ -30,7 +30,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function analisarArquivos(
   arquivos: File[],
-  modo: Modo = 'auto'
+  modo: Modo = 'auto',
+  onProgresso?: (msg: string) => void
 ): Promise<AnalisarResponse> {
   if (!BASE) throw new Error('NEXT_PUBLIC_API_URL não configurada — verifique as variáveis de ambiente da Vercel.')
   const form = new FormData()
@@ -69,7 +70,8 @@ export async function analisarArquivos(
     try {
       const poll = await fetch(pollUrl)
       if (!poll.ok) { recordError(pollUrl, 'GET', `HTTP ${poll.status}`, poll.status); continue }
-      const job = await poll.json() as { status: string; error?: string } & AnalisarResponse
+      const job = await poll.json() as { status: string; error?: string; progresso?: string } & AnalisarResponse
+      if (job.progresso && onProgresso) onProgresso(job.progresso)
       if (job.status === 'done') return job
       if (job.status === 'error') {
         const msg = job.error ?? 'Erro na análise.'
