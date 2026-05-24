@@ -2588,9 +2588,24 @@ async def importar_texto(http_request: Request, request: AnalisarRequest):
 
 @app.post("/api/reclassificar")
 async def api_reclassificar():
-    antes = {r["id"]: r.get("segmento") for r in _historico}
+    antes = {r["id"]: (r.get("segmento"), r.get("orgao"), r.get("score")) for r in _historico}
     _reclassificar_historico()
-    atualizados = sum(1 for r in _historico if antes.get(r["id"]) != r.get("segmento"))
+    # re-extrai orgao e score de todos os registros que têm ficha
+    for r in _historico:
+        ficha = r.get("ficha", "")
+        if not ficha:
+            continue
+        orgao = _extrair_orgao_ficha(ficha)
+        score = extrair_score(ficha)
+        if not r.get("orgao") or r.get("orgao") in ("Não informado", "Não informado", "NÃ£o informado"):
+            r["orgao"] = orgao
+        if not r.get("score"):
+            r["score"] = score
+    _salvar_historico()
+    atualizados = sum(
+        1 for r in _historico
+        if antes.get(r["id"]) != (r.get("segmento"), r.get("orgao"), r.get("score"))
+    )
     return {"atualizados": atualizados, "total": len(_historico)}
 
 
