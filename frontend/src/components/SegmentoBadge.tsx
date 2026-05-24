@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { Tooltip } from './Tooltip'
 
 const segmentoClasses: Record<string, string> = {
   Saude: 'bg-green-100 text-green-700 ring-green-200',
@@ -32,18 +33,36 @@ function normalizeSegmento(segmento: string) {
     .replace(/Ã³/g, 'o')
 }
 
-export function SegmentoBadge({ segmento }: { segmento: string }) {
+export function SegmentoBadge({ segmento, showTooltip = false }: { segmento: string; showTooltip?: boolean }) {
   const normalized = normalizeSegmento(segmento || 'Outros')
   const className = segmentoClasses[normalized] ?? segmentoClasses.Outros
 
-  return (
+  const badge = (
     <span
       className={clsx(
-        'inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+        'inline-flex shrink-0 cursor-default items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
         className
       )}
     >
       {segmento || 'Outros'}
     </span>
+  )
+
+  if (!showTooltip) return badge
+
+  return (
+    <Tooltip
+      content={
+        <div>
+          <p className="mb-1.5 font-semibold text-white">Segmento</p>
+          <p className="text-gray-300">
+            Detectado automaticamente pelo parser. Afeta até 40 dos 100 pontos no score de
+            viabilidade.
+          </p>
+        </div>
+      }
+    >
+      {badge}
+    </Tooltip>
   )
 }

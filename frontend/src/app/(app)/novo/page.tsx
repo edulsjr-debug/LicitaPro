@@ -4,7 +4,7 @@ import { DragEvent, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { analisarArquivos } from '@/lib/api'
 import type { Modo } from '@/lib/types'
-import { extrairScore, extrairSegmento, formatarBytes } from '@/lib/utils'
+import { extrairJustificativas, extrairScore, extrairSegmento, formatarBytes } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
 import { ScoreBadge } from '@/components/ScoreBadge'
 import { SegmentoBadge } from '@/components/SegmentoBadge'
@@ -106,8 +106,8 @@ export default function NovoPage() {
         </div>
 
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-          <ScoreBadge score={extrairScore(ficha)} />
-          <SegmentoBadge segmento={extrairSegmento(ficha)} />
+          <ScoreBadge score={extrairScore(ficha)} breakdown={extrairJustificativas(ficha)} />
+          <SegmentoBadge segmento={extrairSegmento(ficha)} showTooltip />
         </div>
 
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">

@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { getFicha, getHistorico, urlArquivo } from '@/lib/api'
 import type { HistoricoDetalhe } from '@/lib/types'
-import { formatarBytes, formatarData } from '@/lib/utils'
+import { extrairJustificativas, formatarBytes, formatarData } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
 import { ScoreBadge } from '@/components/ScoreBadge'
 import { SegmentoBadge } from '@/components/SegmentoBadge'
@@ -84,8 +84,8 @@ export default function FichaPage() {
         <>
           <header className="mb-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <SegmentoBadge segmento={item.segmento} />
-              <ScoreBadge score={item.score || 0} />
+              <SegmentoBadge segmento={item.segmento} showTooltip />
+              <ScoreBadge score={item.score || 0} breakdown={extrairJustificativas(item.ficha || '')} />
               {item.timestamp ? <span className="text-sm text-gray-500">{formatarData(item.timestamp)}</span> : null}
             </div>
             <h1 className="text-2xl font-semibold tracking-normal text-gray-950">{item.orgao || 'Orgao nao informado'}</h1>

@@ -51,6 +51,13 @@ export function formatarBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} MB`
 }
 
+export function extrairJustificativas(ficha: string): string[] {
+  const section = ficha.match(/##\s*Score de Viabilidade([\s\S]*?)(?=\n##|$)/i)?.[1] ?? ''
+  return [...section.matchAll(/^[-•*]\s*(.+)$/gm)]
+    .map((m) => m[1].trim())
+    .filter(Boolean)
+}
+
 export function horaCurta(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
