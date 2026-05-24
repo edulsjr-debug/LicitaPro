@@ -37,15 +37,21 @@ export async function analisarArquivos(
   arquivos.forEach((f) => form.append('arquivos', f))
   form.append('modo', modo)
 
-  // POST retorna job_id imediatamente — sem timeout possível
+  // POST retorna job_id imediatamente — retry até 3x se Render estiver acordando
   const uploadUrl = `${BASE}/analisar/arquivo`
-  let res: Response
-  try {
-    res = await fetch(uploadUrl, { method: 'POST', body: form })
-  } catch (e) {
-    recordError(uploadUrl, 'POST', e)
-    throw e
+  let res: Response | undefined
+  let lastUploadErr: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 10000))
+    try {
+      res = await fetch(uploadUrl, { method: 'POST', body: form })
+      break
+    } catch (e) {
+      lastUploadErr = e
+      recordError(uploadUrl, 'POST', e)
+    }
   }
+  if (!res) throw lastUploadErr
   if (!res.ok) {
     const err = await res.text().catch(() => res.statusText)
     const msg = err || `HTTP ${res.status}`

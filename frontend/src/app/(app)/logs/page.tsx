@@ -33,7 +33,7 @@ function ClientErrorPanel({ errors, onClear }: { errors: ClientError[]; onClear:
       <div className="max-h-[400px] overflow-auto space-y-2">
         {[...errors].reverse().map((e, i) => (
           <div key={i} className="rounded-md bg-red-50 px-3 py-2 font-mono text-[11px] leading-5">
-            <span className="text-gray-400">{e.ts.replace('T', ' ').slice(0, 19)}</span>
+            <span className="text-gray-400">{new Date(e.ts).toLocaleString('pt-BR')}</span>
             {' '}
             <span className="font-semibold text-red-600">{e.method}</span>
             {' '}
