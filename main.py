@@ -2863,7 +2863,14 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
         _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=chars)
         yield json.dumps({"ficha": ficha, **meta}, ensure_ascii=False).encode() + b"\n"
 
-    return StreamingResponse(stream_com_keepalive(), media_type="text/plain; charset=utf-8")
+    return StreamingResponse(
+        stream_com_keepalive(),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @app.post("/analisar", response_model=AnalisarResponse)
