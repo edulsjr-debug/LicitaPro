@@ -41,8 +41,8 @@ export async function analisarArquivos(
   const uploadUrl = `${BASE}/analisar/arquivo`
   let res: Response | undefined
   let lastUploadErr: unknown
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 10000))
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 15000))
     try {
       res = await fetch(uploadUrl, { method: 'POST', body: form })
       break
@@ -132,4 +132,9 @@ export async function getLogs(limit = 100): Promise<{ log: string[]; errors: str
 
 export function urlArquivo(analiseId: string, arquivoId: string): string {
   return `${BASE}/historico/${analiseId}/arquivos/${arquivoId}`
+}
+
+export function pingHealth(): void {
+  if (!BASE) return
+  fetch(`${BASE}/health`).catch(() => {})
 }

@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
-import { getStats } from '@/lib/api'
+import { getStats, pingHealth } from '@/lib/api'
 import { Tooltip } from './Tooltip'
 
 type IconName = 'list' | 'plus' | 'clock' | 'terminal'
@@ -177,8 +177,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           setStatus({ backOk: false, dbOk: false, versao: null, commit: null })
       })
 
+    const keepAlive = window.setInterval(pingHealth, 4 * 60 * 1000)
+
     return () => {
       mounted = false
+      window.clearInterval(keepAlive)
     }
   }, [])
 
