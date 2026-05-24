@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { getLogs } from '@/lib/api'
+import { getLogs, reclassificar } from '@/lib/api'
 import { Skeleton } from '@/components/Skeleton'
 
 function LogPanel({ title, lines }: { title: string; lines: string[] }) {
@@ -21,6 +21,8 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [countdown, setCountdown] = useState(30)
+  const [reclassMsg, setReclassMsg] = useState<string | null>(null)
+  const [reclassLoading, setReclassLoading] = useState(false)
 
   async function load() {
     setError(null)
@@ -62,18 +64,37 @@ export default function LogsPage() {
           <h1 className="text-2xl font-semibold tracking-normal text-gray-950">Logs</h1>
           <p className="mt-1 text-sm text-gray-600">Atualizacao automatica em {countdown}s.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setLoading(true)
-            load()
-          }}
-          className="rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700"
-        >
-          Atualizar
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={reclassLoading}
+            onClick={async () => {
+              setReclassLoading(true)
+              setReclassMsg(null)
+              try {
+                const r = await reclassificar()
+                setReclassMsg(`${r.atualizados} de ${r.total} registros corrigidos.`)
+              } catch {
+                setReclassMsg('Erro ao reclassificar.')
+              } finally {
+                setReclassLoading(false)
+              }
+            }}
+            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+          >
+            {reclassLoading ? 'Corrigindo…' : 'Corrigir histórico'}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); load() }}
+            className="rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700"
+          >
+            Atualizar
+          </button>
+        </div>
       </div>
 
+      {reclassMsg ? <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{reclassMsg}</div> : null}
       {error ? <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       {loading ? (
