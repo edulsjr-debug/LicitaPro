@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { getStats } from '@/lib/api'
@@ -66,6 +66,39 @@ function NavLink({ href, label, icon }: { href: string; label: string; icon: Ico
   )
 }
 
+function LogoutButton({ className }: { className?: string }) {
+  const router = useRouter()
+
+  async function handleLogout() {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    router.push('/login')
+    router.refresh()
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleLogout}
+      className={clsx(
+        'flex items-center gap-2 rounded-md px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700',
+        className
+      )}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5">
+        <path
+          d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      Sair
+    </button>
+  )
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [version, setVersion] = useState<string | null>(null)
 
@@ -100,8 +133,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        <div className="border-t border-gray-100 p-4 text-xs text-gray-500">
-          {version ? <span>API {version}</span> : <span>API indisponivel</span>}
+        <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3">
+          <span className="text-xs text-gray-400">
+            {version ? `API ${version}` : 'API indisponivel'}
+          </span>
+          <LogoutButton />
         </div>
       </aside>
 
@@ -110,7 +146,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="text-base font-semibold text-gray-950">
             Licita<span className="text-brand-600">PRO</span>
           </Link>
-          {version ? <span className="text-xs text-gray-500">API {version}</span> : null}
+          <LogoutButton />
         </div>
       </header>
 

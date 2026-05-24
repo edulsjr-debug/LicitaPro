@@ -46,11 +46,29 @@ export default function NovoPage() {
     setLoading(true)
     setError(null)
 
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      await Notification.requestPermission()
+    }
+
     try {
       const response = await analisarArquivos(files, modo)
       setFicha(response.ficha)
+
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const score = extrairScore(response.ficha)
+        const segmento = extrairSegmento(response.ficha)
+        new Notification('LicitaPRO — Análise concluída', {
+          body: `Score ${score}/100 · ${segmento}`,
+          icon: '/favicon.ico',
+        })
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel analisar o edital.')
+      const msg = err instanceof Error ? err.message : 'Nao foi possivel analisar o edital.'
+      setError(msg)
+
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification('LicitaPRO — Erro na análise', { body: msg, icon: '/favicon.ico' })
+      }
     } finally {
       setLoading(false)
     }

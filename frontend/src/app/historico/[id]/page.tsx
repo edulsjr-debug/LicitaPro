@@ -3,25 +3,13 @@
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { getFicha } from '@/lib/api'
+import { getFicha, getHistorico, urlArquivo } from '@/lib/api'
 import type { HistoricoDetalhe } from '@/lib/types'
+import { formatarBytes, formatarData } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
 import { ScoreBadge } from '@/components/ScoreBadge'
 import { SegmentoBadge } from '@/components/SegmentoBadge'
 import { Skeleton } from '@/components/Skeleton'
-
-function formatDate(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
-}
 
 export default function FichaPage() {
   const params = useParams<{ id: string }>()
@@ -38,8 +26,18 @@ export default function FichaPage() {
       setError(null)
 
       try {
-        const response = await getFicha(params.id)
-        if (mounted) setItem(response)
+        const [response, historico] = await Promise.all([getFicha(params.id), getHistorico().catch(() => ({ historico: [] }))])
+        const resumo = historico.historico.find((registro) => registro.id === params.id)
+        if (mounted) {
+          setItem({
+            ...resumo,
+            ...response,
+            id: params.id,
+            timestamp: response.timestamp || resumo?.timestamp || '',
+            objeto: response.objeto || resumo?.objeto || '',
+            valor: response.valor || resumo?.valor || '',
+          })
+        }
       } catch (err) {
         if (mounted) setError(err instanceof Error ? err.message : 'Analise nao encontrada')
       } finally {
@@ -62,10 +60,14 @@ export default function FichaPage() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-      <Link href="/historico" className="mb-5 inline-flex text-sm font-medium text-gray-600 hover:text-gray-950">
-        Voltar ao historico
-      </Link>
+    <div>
+      <div className="mb-5 flex items-center gap-2 text-sm text-gray-500">
+        <Link href="/historico" className="font-medium text-brand-700 hover:text-brand-800">
+          Historico
+        </Link>
+        <span>/</span>
+        <span className="truncate">{item?.orgao || 'Analise'}</span>
+      </div>
 
       {loading ? (
         <div className="space-y-4">
@@ -83,8 +85,8 @@ export default function FichaPage() {
           <header className="mb-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <SegmentoBadge segmento={item.segmento} />
-              <ScoreBadge score={item.score} />
-              <span className="text-sm text-gray-500">{formatDate(item.timestamp)}</span>
+              <ScoreBadge score={item.score || 0} />
+              {item.timestamp ? <span className="text-sm text-gray-500">{formatarData(item.timestamp)}</span> : null}
             </div>
             <h1 className="text-2xl font-semibold tracking-normal text-gray-950">{item.orgao || 'Orgao nao informado'}</h1>
           </header>
@@ -98,6 +100,34 @@ export default function FichaPage() {
               </p>
             ) : null}
           </section>
+
+          {item.arquivos?.length ? (
+            <section className="mb-5 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-950">Arquivos anexados</h2>
+              <div className="mt-3 space-y-2">
+                {[...item.arquivos].sort((a, b) => (a.ordem || 0) - (b.ordem || 0)).map((arquivo) => {
+                  const nome = arquivo.arquivo || arquivo.nome_original || 'arquivo'
+                  return (
+                    <div key={arquivo.id} className="flex items-center justify-between gap-3 rounded-md border border-gray-100 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-gray-900">{nome}</p>
+                        <p className="text-xs text-gray-500">
+                          {arquivo.mime_type || 'application/octet-stream'}
+                          {arquivo.tamanho_bytes ? ` - ${formatarBytes(arquivo.tamanho_bytes)}` : ''}
+                        </p>
+                      </div>
+                      <a
+                        href={urlArquivo(params.id, arquivo.id)}
+                        className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Baixar
+                      </a>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          ) : null}
 
           <div className="mb-4 flex justify-end">
             <button
@@ -114,6 +144,6 @@ export default function FichaPage() {
           </section>
         </>
       )}
-    </main>
+    </div>
   )
 }
