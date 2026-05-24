@@ -9,7 +9,7 @@ function LogPanel({ title, lines }: { title: string; lines: string[] }) {
     <section className="min-h-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
       <h2 className="mb-3 text-sm font-semibold text-gray-950">{title}</h2>
       <pre className="max-h-[520px] min-h-64 overflow-auto rounded-md bg-[#1e1e2e] p-4 text-xs leading-6 text-gray-100">
-        {lines.length ? lines.join('\n') : 'Sem registros.'}
+        {lines.length ? lines.join('\n') : '# Sem registros nesta sessão.\n# Os logs são reiniciados a cada deploy no Render (disco efêmero).\n# Novos registros aparecem após as próximas análises.'}
       </pre>
     </section>
   )
