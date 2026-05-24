@@ -25,7 +25,7 @@ import docx
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -2791,11 +2791,10 @@ async def redirect_logs():
     return response
 
 
-@app.post("/analisar/arquivo", response_model=AnalisarResponse)
+@app.post("/analisar/arquivo")
 async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
-    _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
 
     hoje = datetime.date.today().isoformat()
     if _stats["hoje"] != hoje:
@@ -2837,11 +2836,34 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
                 trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
             partes.append(f"=== {nome} ===\n{trecho}")
         texto_completo = "\n\n".join(partes)
-    ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
-    _stats["analises_hoje"] += 1
-    meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
-    _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
-    return AnalisarResponse(ficha=ficha, **meta)
+
+    _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
+    request_id = request.state.request_id
+    num_arquivos = len(arquivos)
+    chars = len(texto_completo)
+
+    async def stream_com_keepalive():
+        task = asyncio.create_task(analisar_com_fallback(texto_completo, num_arquivos, modo=modo))
+        while not task.done():
+            yield b"\n"
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                pass
+        if task.cancelled() or task.exception() is not None:
+            exc = task.exception() if not task.cancelled() else None
+            detail = getattr(exc, "detail", str(exc)) if exc else "Análise cancelada."
+            yield json.dumps({"error": detail}, ensure_ascii=False).encode() + b"\n"
+            return
+        ficha = task.result()
+        _stats["analises_hoje"] += 1
+        meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
+        _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=chars)
+        yield json.dumps({"ficha": ficha, **meta}, ensure_ascii=False).encode() + b"\n"
+
+    return StreamingResponse(stream_com_keepalive(), media_type="text/plain; charset=utf-8")
 
 
 @app.post("/analisar", response_model=AnalisarResponse)

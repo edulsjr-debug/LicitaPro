@@ -22,10 +22,29 @@ export async function analisarArquivos(
   arquivos: File[],
   modo: Modo = 'auto'
 ): Promise<AnalisarResponse> {
+  if (!BASE) throw new Error('NEXT_PUBLIC_API_URL não configurada — verifique as variáveis de ambiente da Vercel.')
   const form = new FormData()
   arquivos.forEach((f) => form.append('arquivos', f))
   form.append('modo', modo)
-  return request<AnalisarResponse>('/analisar/arquivo', { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/analisar/arquivo`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText)
+    throw new Error(err || `HTTP ${res.status}`)
+  }
+  // Streaming response: backend sends \n keepalives, last line is the JSON result
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: !done })
+  }
+  const lastLine = buffer.split('\n').map((l) => l.trim()).filter(Boolean).at(-1) ?? ''
+  if (!lastLine) throw new Error('Resposta vazia do servidor.')
+  const parsed = JSON.parse(lastLine) as AnalisarResponse & { error?: string }
+  if (parsed.error) throw new Error(parsed.error)
+  return parsed
 }
 
 export async function analisarTexto(
