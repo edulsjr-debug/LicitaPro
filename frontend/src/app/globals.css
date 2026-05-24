@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f8f9fb;
+  --fg: #111827;
+  --fg-2: #374151;
+  --fg-3: #6b7280;
+  --border: #e5e7eb;
+  --border-subtle: #f3f4f6;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.06);
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Markdown rendered analysis */
+.ficha-md h2 { @apply text-base font-semibold mt-6 mb-2 text-gray-800 border-b border-gray-100 pb-1; }
+.ficha-md h3 { @apply text-sm font-semibold mt-4 mb-1 text-gray-700; }
+.ficha-md table { @apply w-full text-sm border-collapse my-3; }
+.ficha-md th { @apply bg-gray-50 font-semibold text-left px-3 py-2 border border-gray-200 text-xs uppercase tracking-wide text-gray-500; }
+.ficha-md td { @apply px-3 py-2 border border-gray-200 text-gray-700 align-top; }
+.ficha-md ul { @apply list-disc pl-5 space-y-1 text-sm text-gray-700; }
+.ficha-md li { @apply leading-relaxed; }
+.ficha-md p { @apply text-sm text-gray-700 leading-relaxed my-1; }
+.ficha-md blockquote { @apply border-l-4 border-amber-400 bg-amber-50 px-4 py-2 my-2 text-sm text-amber-900 rounded-r; }
+.ficha-md strong { @apply font-semibold; }
+.ficha-md code { @apply text-xs bg-gray-100 px-1 py-0.5 rounded font-mono; }

@@ -310,11 +310,14 @@ _groq2 = (
     else None
 )
 
+_FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[_FRONTEND_URL, "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -2634,6 +2637,20 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
         except Exception:
             logger.exception("Erro ao baixar arquivo do hist?rico", extra={"request_id": "-"})
     raise HTTPException(404, "Arquivo nÃ£o encontrado.")
+
+
+@app.get("/stats")
+async def get_stats():
+    scores = [r.get("score", 0) for r in _historico if r.get("score")]
+    score_medio = round(sum(scores) / len(scores)) if scores else 0
+    return {
+        **_stats,
+        "historico_n": len(_historico),
+        "score_medio": score_medio,
+        "versao": APP_VERSION_LABEL,
+        "commit": APP_COMMIT_LABEL,
+        "limite_diario": LIMITE_DIARIO,
+    }
 
 
 @app.get("/api/storage-check")
