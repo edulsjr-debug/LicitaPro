@@ -1,11 +1,20 @@
 export function extrairScore(ficha: string): number {
-  const match = ficha.match(/Score[^:]*:\*?\*?\s*(\d+)\/100/) || ficha.match(/\*\*Score:\*\*\s*(\d+)/)
+  // formato parser: **65/100 — Média**
+  // formato IA: **Score:** 65  ou  Score de Viabilidade: **65**/100
+  const match =
+    ficha.match(/\*\*(\d+)\/100/) ||
+    ficha.match(/Score[^:]*:\*?\*?\s*(\d+)\/100/) ||
+    ficha.match(/\*\*Score:\*\*\s*(\d+)/)
   return match ? Math.min(100, Math.max(0, Number.parseInt(match[1], 10))) : 0
 }
 
 export function extrairSegmento(ficha: string): string {
-  const match = ficha.match(/Segmento[^:]*:\*?\*?\s*([^\n]+)/i) || ficha.match(/\*\*Segmento:\*\*\s*([^\n]+)/i)
-  return match ? match[1].replace(/\*/g, '').trim() : 'Outros'
+  // formato parser (justificativa): "Segmento Viagens e Passagens: 20/40 pts"
+  const parserMatch = ficha.match(/Segmento\s+([^:\n]+?):\s*\d+\/\d+/i)
+  if (parserMatch) return parserMatch[1].trim()
+  // formato IA: **Segmento:** Viagens
+  const iaMatch = ficha.match(/\*\*Segmento:\*\*\s*([^\n|]+)/i) || ficha.match(/Segmento:\s*([^\n|]+)/i)
+  return iaMatch ? iaMatch[1].replace(/\*/g, '').trim() : 'Outros'
 }
 
 export function formatarData(iso: string): string {
