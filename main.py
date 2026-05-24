@@ -1742,6 +1742,13 @@ def detectar_segmento(texto: str) -> str:
             return nome
     return "Outros"
 
+def _extrair_orgao_ficha(ficha: str) -> str:
+    # busca a linha do órgão na tabela markdown sem depender de acentuação literal
+    m = re.search(r'\|\s*\*\*[Oo]rg[^*|]{0,5}\*\*\s*\|\s*([^|\n]+)', ficha)
+    if m:
+        return m.group(1).strip()
+    return "Não informado"
+
 def extrair_campo(ficha: str, campo: str) -> str:
     # padrÃ£o markdown: | **Campo** | valor |
     m = re.search(rf'\|\s*\*\*{re.escape(campo)}\*\*\s*\|\s*([^|\n]+)', ficha)
@@ -1765,12 +1772,15 @@ def extrair_objeto(ficha: str) -> str:
     return "NÃ£o informado"
 
 def extrair_score(ficha: str) -> int:
-    m = re.search(r'\*\*Score:\*\*\s*(\d+)', ficha)
-    if m:
-        try:
-            return max(0, min(100, int(m.group(1))))
-        except Exception:
-            pass
+    # formato parser: **65/100 — Média**
+    # formato IA:     **Score:** 65
+    for pat in (r'\*\*(\d+)/100', r'\*\*Score:\*\*\s*(\d+)', r'Score[^:]*:\s*\*?\*?(\d+)'):
+        m = re.search(pat, ficha)
+        if m:
+            try:
+                return max(0, min(100, int(m.group(1))))
+            except Exception:
+                pass
     return 0
 
 def _eh_ficha(texto: str) -> bool:
@@ -1794,12 +1804,12 @@ def registrar_analise(ficha: str):
     registro = {
         "id":        uuid.uuid4().hex[:10],
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     extrair_campo(ficha, "Ã“rgÃ£o"),
-        "valor":     extrair_campo(ficha, "Valor Estimado Total"),
-        "objeto":    extrair_objeto(ficha),
-        "segmento":  detectar_segmento(ficha),
-        "score":     extrair_score(ficha),
-        "ficha":     ficha,
+        “orgao”:     _extrair_orgao_ficha(ficha),
+        “valor”:     extrair_campo(ficha, “Valor Estimado Total”),
+        “objeto”:    extrair_objeto(ficha),
+        “segmento”:  detectar_segmento(ficha),
+        “score”:     extrair_score(ficha),
+        “ficha”:     ficha,
     }
     _historico.insert(0, registro)
     if len(_historico) > 500:
@@ -1953,7 +1963,7 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
     registro = {
         "id":        analise_id,
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     extrair_campo(ficha, "Ãƒâ€œrgÃƒÂ£o"),
+        "orgao":     _extrair_orgao_ficha(ficha),
         "valor":     extrair_campo(ficha, "Valor Estimado Total"),
         "objeto":    extrair_objeto(ficha),
         "segmento":  detectar_segmento(ficha),
