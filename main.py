@@ -1886,6 +1886,50 @@ def _extrair_orgao_ficha(ficha: str) -> str:
         return m.group(1).strip()
     return "Não informado"
 
+
+_ABREV_MODALIDADE = [
+    ("pregão eletrônico", "PE"), ("pregao eletronico", "PE"),
+    ("pregão presencial", "PP"), ("pregao presencial", "PP"),
+    ("dispensa eletrônica", "DE"), ("dispensa eletronica", "DE"),
+    ("dispensa de licitação", "DL"), ("dispensa de licitacao", "DL"),
+    ("concorrência eletrônica", "CE"), ("concorrencia eletronica", "CE"),
+    ("concorrência", "CC"), ("concorrencia", "CC"),
+    ("tomada de preços", "TP"), ("tomada de precos", "TP"),
+    ("inexigibilidade", "INX"),
+    ("chamamento público", "CP"), ("chamamento publico", "CP"),
+    ("credenciamento", "CRD"),
+    ("leilão", "LEI"), ("leilao", "LEI"),
+]
+
+def _abreviar_numero(numero: str) -> str:
+    n = numero.strip()
+    norm = unicodedata.normalize("NFKD", n.lower()).encode("ascii", "ignore").decode()
+    for termo, sigla in _ABREV_MODALIDADE:
+        t_norm = unicodedata.normalize("NFKD", termo).encode("ascii", "ignore").decode()
+        if norm.startswith(t_norm):
+            resto = n[len(termo):].strip().lstrip("–—-– ").strip()
+            return f"{sigla} {resto}" if resto else sigla
+    return n[:50]
+
+
+def _gerar_nome_edital(ficha: str) -> str:
+    numero = extrair_campo(ficha, "Nº / Processo")
+    orgao = _extrair_orgao_ficha(ficha)
+    # remove sufixo de estado "/RO", "/SP", etc.
+    orgao_curto = re.sub(r"\s*/[A-Z]{2}$", "", orgao.strip())[:50].strip()
+
+    num_ok = numero not in ("", "Não identificado", "Não informado")
+    org_ok = orgao_curto not in ("", "Não identificado", "Não informado")
+
+    if num_ok and org_ok:
+        return f"{_abreviar_numero(numero)} — {orgao_curto}"
+    if org_ok:
+        return orgao_curto
+    if num_ok:
+        return _abreviar_numero(numero)
+    objeto = extrair_objeto(ficha)
+    return objeto[:60].strip() if objeto else "Edital sem identificação"
+
 def extrair_campo(ficha: str, campo: str) -> str:
     # padrÃ£o markdown: | **Campo** | valor |
     m = re.search(rf'\|\s*\*\*{re.escape(campo)}\*\*\s*\|\s*([^|\n]+)', ficha)
@@ -1953,6 +1997,10 @@ def _reclassificar_historico():
             novo_score = extrair_score(ficha)
             if r.get("score") != novo_score:
                 r["score"] = novo_score
+                mudou = True
+            novo_nome = _gerar_nome_edital(ficha)
+            if r.get("nome") != novo_nome:
+                r["nome"] = novo_nome
                 mudou = True
     if mudou:
         _salvar_historico()
@@ -2094,6 +2142,7 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
     registro = {
         "id":        analise_id,
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "nome":      _gerar_nome_edital(ficha),
         "orgao":     _extrair_orgao_ficha(ficha),
         "valor":     extrair_campo(ficha, "Valor Estimado Total"),
         "objeto":    extrair_objeto(ficha),

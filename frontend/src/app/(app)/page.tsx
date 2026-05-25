@@ -138,7 +138,7 @@ export default function HomePage() {
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0">
-                        <h3 className="truncate text-sm font-semibold text-gray-950">{item.orgao || 'Orgao nao informado'}</h3>
+                        <h3 className="truncate text-sm font-semibold text-gray-950">{item.nome || item.orgao || 'Sem identificação'}</h3>
                         <p className="mt-1 line-clamp-2 text-sm leading-6 text-gray-600">{item.objeto || 'Objeto nao informado'}</p>
                       </div>
                       <ScoreBadge score={item.score || 0} />

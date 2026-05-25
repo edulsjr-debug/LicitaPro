@@ -1,6 +1,7 @@
 export interface HistoricoItem {
   id: string
   timestamp: string
+  nome?: string
   orgao: string
   valor: string
   objeto: string

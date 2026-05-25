@@ -88,7 +88,7 @@ export default function FichaPage() {
               <ScoreBadge score={item.score || 0} breakdown={extrairJustificativas(item.ficha || '')} />
               {item.timestamp ? <span className="text-sm text-gray-500">{formatarData(item.timestamp)}</span> : null}
             </div>
-            <h1 className="text-2xl font-semibold tracking-normal text-gray-950">{item.orgao || 'Orgao nao informado'}</h1>
+            <h1 className="text-2xl font-semibold tracking-normal text-gray-950">{item.nome || item.orgao || 'Sem identificação'}</h1>
           </header>
 
           <section className="mb-5 rounded-lg border border-gray-200 bg-gray-50 p-4">
