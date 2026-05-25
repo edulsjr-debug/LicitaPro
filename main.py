@@ -11,6 +11,7 @@ import queue as _queue_module
 import re
 import threading as _threading_module
 import time
+import unicodedata
 import uuid
 import urllib.error
 import urllib.request
@@ -2797,6 +2798,7 @@ async def get_ficha_historico(id: str):
             return {
                 "id":        r.get("id"),
                 "timestamp": r.get("timestamp"),
+                "nome":      r.get("nome"),
                 "orgao":     r.get("orgao"),
                 "objeto":    r.get("objeto"),
                 "valor":     r.get("valor"),
@@ -2806,6 +2808,22 @@ async def get_ficha_historico(id: str):
                 "arquivos":  r.get("arquivos", []),
                 "fonte":     r.get("fonte"),
             }
+    raise HTTPException(404, "Análise não encontrada.")
+
+
+class _RenomearBody(BaseModel):
+    nome: str
+
+@app.patch("/historico/{id}/nome")
+async def renomear_analise(id: str, body: _RenomearBody):
+    novo_nome = body.nome.strip()[:120]
+    if not novo_nome:
+        raise HTTPException(400, "Nome não pode ser vazio.")
+    for r in _historico:
+        if r["id"] == id:
+            r["nome"] = novo_nome
+            _salvar_historico()
+            return {"ok": True, "nome": novo_nome}
     raise HTTPException(404, "Análise não encontrada.")
 
 
