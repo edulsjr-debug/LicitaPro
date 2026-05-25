@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import html as _html
 import io
 import hashlib
@@ -310,7 +311,10 @@ try:
     PARSER_MAX_CHARS_FALLBACK = int(os.getenv("PARSER_MAX_CHARS_FALLBACK", "80000"))
 except ValueError:
     PARSER_MAX_CHARS_FALLBACK = 80000
-OCR_HABILITADO = os.getenv("OCR_HABILITADO", "true").lower() not in ("0", "false", "no", "off")
+_is_render = bool(os.getenv("RENDER"))
+# OCR desabilitado por padrão no Render (512 MB RAM) — ative com OCR_HABILITADO=true se necessário
+_ocr_default = "false" if _is_render else "true"
+OCR_HABILITADO = os.getenv("OCR_HABILITADO", _ocr_default).lower() not in ("0", "false", "no", "off")
 try:
     OCR_MIN_CHAR = int(os.getenv("OCR_MIN_CHAR", "120"))
 except ValueError:
@@ -320,9 +324,9 @@ try:
 except ValueError:
     OCR_MAX_PAGINAS = 20
 try:
-    OCR_DPI = int(os.getenv("OCR_DPI", "220"))
+    OCR_DPI = int(os.getenv("OCR_DPI", "150"))
 except ValueError:
-    OCR_DPI = 220
+    OCR_DPI = 150
 try:
     OCR_MAX_FILE_BYTES = int(os.getenv("OCR_MAX_FILE_BYTES", "819200"))  # 800 KB
 except ValueError:
@@ -334,7 +338,6 @@ except ValueError:
 APP_VERSION = os.getenv("APP_VERSION", "1.0")
 APP_COMMIT = os.getenv("APP_COMMIT") or os.getenv("RENDER_GIT_COMMIT") or "local"
 APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT") or ""
-_is_render = bool(os.getenv("RENDER"))
 APP_VERSION_LABEL = f"{APP_VERSION} · {'render' if _is_render else 'local'}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
@@ -1286,6 +1289,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pdf_ocr.close()
             except Exception:
                 pass
+        gc.collect()
 
 
 def _texto_de_odt(conteudo: bytes) -> str:
