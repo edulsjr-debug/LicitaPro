@@ -2221,6 +2221,8 @@ _SEGMENTOS_DEFAULT = [
     "Viagens e Passagens", "Eventos e Capacitação", "Mobiliário e Escritório", "Outros",
 ]
 
+_MODELO_SEGMENTACAO = "gemini-1.5-flash-8b"  # 1500 req/dia free tier (vs 20 do flash-lite)
+
 async def _segmentar_lote_gemini(lote: list[tuple[str, str]]) -> dict[str, str]:
     """Recebe lista de (id, objeto), retorna dict {id: segmento}."""
     itens_txt = "\n\n".join(
@@ -2235,17 +2237,24 @@ async def _segmentar_lote_gemini(lote: list[tuple[str, str]]) -> dict[str, str]:
         f'[{{"id":"...","segmento":"..."}}]\n\n'
         f"Licitações:\n{itens_txt}"
     )
-    try:
-        raw = await _gemini_texto_livre(prompt)
-        # extrai JSON mesmo se vier com ```json...```
-        m = re.search(r"\[[\s\S]+\]", raw)
-        if not m:
+    for tentativa in range(3):
+        try:
+            raw = await _gemini_texto_livre(prompt, modelo=_MODELO_SEGMENTACAO)
+            m = re.search(r"\[[\s\S]+\]", raw)
+            if not m:
+                return {}
+            dados = json.loads(m.group(0))
+            return {item["id"]: item["segmento"] for item in dados if "id" in item and "segmento" in item}
+        except HTTPException as e:
+            if e.status_code == 429 and tentativa < 2:
+                await asyncio.sleep(30)
+                continue
+            logger.warning("Erro ao segmentar lote: %s", e, extra={"request_id": "-"})
             return {}
-        dados = json.loads(m.group(0))
-        return {item["id"]: item["segmento"] for item in dados if "id" in item and "segmento" in item}
-    except Exception as e:
-        logger.warning("Erro ao segmentar lote: %s", e, extra={"request_id": "-"})
-        return {}
+        except Exception as e:
+            logger.warning("Erro ao segmentar lote: %s", e, extra={"request_id": "-"})
+            return {}
+    return {}
 
 
 async def _chamar_gemini_http(texto: str, num_docs: int, modelo: str) -> str:
