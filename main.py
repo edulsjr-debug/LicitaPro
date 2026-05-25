@@ -338,6 +338,8 @@ _stats = {
     "por_provedor": {},
     "hoje": datetime.date.today().isoformat(),
     "analises_hoje": 0,
+    "ia_disponivel": True,   # False quando qualquer provedor Gemini retorna 429
+    "ia_quota_reset": None,  # ISO timestamp de quando a quota foi esgotada
 }
 
 # custo em USD por 1M tokens (input, output)
@@ -2207,6 +2209,9 @@ async def _gemini_texto_livre(prompt: str, modelo: str = "gemini-2.5-flash-lite"
         raw = await asyncio.to_thread(_do)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        if e.code == 429:
+            _stats["ia_disponivel"] = False
+            _stats["ia_quota_reset"] = datetime.datetime.now().isoformat(timespec="seconds")
         raise HTTPException(e.code, f"Gemini: {body or str(e)}")
     except urllib.error.URLError as e:
         raise HTTPException(500, f"Gemini conexão: {e.reason}")
@@ -3059,6 +3064,7 @@ async def get_stats():
         "versao": APP_VERSION_LABEL,
         "commit": APP_COMMIT_LABEL,
         "limite_diario": LIMITE_DIARIO,
+        "limite_diario_atingido": _stats["analises_hoje"] >= LIMITE_DIARIO,
         "db_ok": _check_db_ok(),
     }
 
@@ -3163,6 +3169,8 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     if _stats["hoje"] != hoje:
         _stats["hoje"] = hoje
         _stats["analises_hoje"] = 0
+        _stats["ia_disponivel"] = True   # reseta quota à meia-noite
+        _stats["ia_quota_reset"] = None
 
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
         raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")

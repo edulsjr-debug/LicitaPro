@@ -2,8 +2,8 @@
 
 import { DragEvent, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { analisarArquivos } from '@/lib/api'
-import type { Modo } from '@/lib/types'
+import { analisarArquivos, getStats } from '@/lib/api'
+import type { Modo, StatsResponse } from '@/lib/types'
 import { extrairJustificativas, extrairScore, extrairSegmento, formatarBytes } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
 import { ScoreBadge } from '@/components/ScoreBadge'
@@ -27,6 +27,29 @@ export default function NovoPage() {
   const [ficha, setFicha] = useState<string | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [statusIA, setStatusIA] = useState<Pick<StatsResponse, 'ia_disponivel' | 'limite_diario_atingido' | 'analises_hoje' | 'ia_quota_reset'> & { limite_diario?: number }>({
+    ia_disponivel: true,
+    limite_diario_atingido: false,
+    analises_hoje: 0,
+  })
+
+  useEffect(() => {
+    async function carregarStatus() {
+      try {
+        const s = await getStats()
+        setStatusIA({
+          ia_disponivel: s.ia_disponivel ?? true,
+          limite_diario_atingido: s.limite_diario_atingido ?? false,
+          analises_hoje: s.analises_hoje,
+          limite_diario: s.limite_diario,
+          ia_quota_reset: s.ia_quota_reset,
+        })
+      } catch { /* silencioso — não bloqueia a página */ }
+    }
+    carregarStatus()
+    const t = window.setInterval(carregarStatus, 3 * 60 * 1000)
+    return () => window.clearInterval(t)
+  }, [])
 
   function addFiles(fileList: FileList | null) {
     if (!fileList) return
@@ -207,20 +230,59 @@ export default function NovoPage() {
       {files.length ? (
         <section className="mt-5">
           <div className="grid gap-3 sm:grid-cols-3">
-            {modos.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setModo(option.value)}
-                className={clsx(
-                  'rounded-lg border bg-white p-4 text-left shadow-sm transition',
-                  modo === option.value ? 'border-brand-500 ring-2 ring-brand-100' : 'border-gray-200 hover:border-gray-300'
-                )}
-              >
-                <span className="block text-sm font-semibold text-gray-950">{option.label}</span>
-                <span className="mt-1 block text-xs leading-5 text-gray-600">{option.description}</span>
-              </button>
-            ))}
+            {modos.map((option) => {
+              const iaIndisponivel = !statusIA.ia_disponivel
+              const limiteAtingido = statusIA.limite_diario_atingido
+
+              const bloqueado =
+                limiteAtingido ||
+                (iaIndisponivel && (option.value === 'ia' || option.value === 'auto'))
+
+              let avisoModo: string | null = null
+              if (limiteAtingido) {
+                avisoModo = `Limite diário atingido (${statusIA.analises_hoje}/${statusIA.limite_diario ?? 20})`
+              } else if (iaIndisponivel && option.value === 'ia') {
+                avisoModo = 'Quota Gemini esgotada — reseta à meia-noite'
+              } else if (iaIndisponivel && option.value === 'auto') {
+                avisoModo = 'IA indisponível — usará somente parser'
+              }
+
+              const autoSemIA = !limiteAtingido && iaIndisponivel && option.value === 'auto'
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => !bloqueado && setModo(option.value)}
+                  disabled={bloqueado && option.value !== 'auto'}
+                  className={clsx(
+                    'rounded-lg border p-4 text-left shadow-sm transition',
+                    bloqueado && option.value !== 'auto'
+                      ? 'cursor-not-allowed border-gray-100 bg-gray-50 opacity-50'
+                      : autoSemIA
+                      ? 'border-amber-300 bg-amber-50'
+                      : modo === option.value
+                      ? 'border-brand-500 bg-white ring-2 ring-brand-100'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={clsx('text-sm font-semibold', bloqueado && option.value !== 'auto' ? 'text-gray-400' : 'text-gray-950')}>
+                      {option.label}
+                    </span>
+                    {bloqueado && option.value !== 'auto' && (
+                      <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">Indisponível</span>
+                    )}
+                    {autoSemIA && (
+                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Sem IA</span>
+                    )}
+                  </div>
+                  <span className={clsx('mt-1 block text-xs leading-5', bloqueado && option.value !== 'auto' ? 'text-gray-400' : autoSemIA ? 'text-amber-700' : 'text-gray-600')}>
+                    {avisoModo ?? option.description}
+                  </span>
+                </button>
+              )
+            })}
           </div>
 
           {error ? (
@@ -232,7 +294,7 @@ export default function NovoPage() {
           <button
             type="button"
             onClick={analisar}
-            disabled={loading}
+            disabled={loading || !!statusIA.limite_diario_atingido}
             className="mt-5 flex min-h-11 w-full flex-col items-center justify-center rounded-md bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {loading ? (

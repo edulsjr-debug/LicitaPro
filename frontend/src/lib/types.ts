@@ -48,6 +48,9 @@ export interface StatsResponse {
   historico_n?: number
   limite_diario?: number
   analises_hoje: number
+  limite_diario_atingido?: boolean
+  ia_disponivel?: boolean
+  ia_quota_reset?: string
   por_provedor: Record<string, { analises: number; tokens: number; custo_usd: number }>
   versao: string
   commit: string
