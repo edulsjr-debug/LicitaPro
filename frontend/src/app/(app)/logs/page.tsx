@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { getLogs, reclassificar } from '@/lib/api'
+import { getLogs, reclassificar, resegmentarIA } from '@/lib/api'
 import { getClientErrors, clearClientErrors, type ClientError } from '@/lib/errorStore'
 import { Skeleton } from '@/components/Skeleton'
 
@@ -56,6 +56,8 @@ export default function LogsPage() {
   const [countdown, setCountdown] = useState(30)
   const [reclassMsg, setReclassMsg] = useState<string | null>(null)
   const [reclassLoading, setReclassLoading] = useState(false)
+  const [resegMsg, setResegMsg] = useState<string | null>(null)
+  const [resegLoading, setResegLoading] = useState(false)
 
   function refreshClientErrors() {
     setClientErrors(getClientErrors())
@@ -122,6 +124,25 @@ export default function LogsPage() {
           </button>
           <button
             type="button"
+            disabled={resegLoading}
+            onClick={async () => {
+              setResegLoading(true)
+              setResegMsg(null)
+              try {
+                const r = await resegmentarIA()
+                setResegMsg(`${r.atualizados} de ${r.total} editais resegmentados pela IA.`)
+              } catch {
+                setResegMsg('Erro ao resegmentar.')
+              } finally {
+                setResegLoading(false)
+              }
+            }}
+            className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+          >
+            {resegLoading ? 'Resegmentando…' : 'Resegmentar com IA'}
+          </button>
+          <button
+            type="button"
             onClick={() => { setLoading(true); load() }}
             className="rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700"
           >
@@ -131,6 +152,7 @@ export default function LogsPage() {
       </div>
 
       {reclassMsg ? <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{reclassMsg}</div> : null}
+      {resegMsg ? <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">{resegMsg}</div> : null}
       {error ? <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <ClientErrorPanel

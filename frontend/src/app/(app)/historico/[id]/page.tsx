@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { getFicha, getHistorico, urlArquivo } from '@/lib/api'
+import { atualizarSegmento, getFicha, getHistorico, getStats, urlArquivo } from '@/lib/api'
 import type { HistoricoDetalhe } from '@/lib/types'
 import { extrairJustificativas, formatarBytes, formatarData } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
@@ -71,12 +71,95 @@ function NomeEditavel({ id, nome }: { id: string; nome: string }) {
   )
 }
 
+const SEGMENTOS_PADRAO = [
+  'Saúde', 'Educação', 'Obras e Infraestrutura', 'Alimentação', 'Tecnologia e TI',
+  'Transporte', 'Viagens e Passagens', 'Eventos e Capacitação', 'Limpeza e Conservação',
+  'Mobiliário e Escritório', 'Segurança', 'Outros',
+]
+
+function SegmentoEditavel({ id, segmento, segmentos, onSave }: {
+  id: string; segmento: string; segmentos: string[]; onSave: (seg: string) => void
+}) {
+  const [editando, setEditando] = useState(false)
+  const [valor, setValor] = useState(segmento)
+  const [novoCustom, setNovoCustom] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const selectRef = useRef<HTMLSelectElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { setValor(segmento) }, [segmento])
+  useEffect(() => { if (editando) selectRef.current?.focus() }, [editando])
+
+  const lista = Array.from(new Set([...SEGMENTOS_PADRAO, ...segmentos])).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+
+  async function salvar(seg: string) {
+    const novo = seg.trim()
+    if (!novo || novo === segmento) { setEditando(false); setValor(segmento); return }
+    setSalvando(true)
+    try {
+      await atualizarSegmento(id, novo)
+      onSave(novo)
+      setEditando(false)
+    } finally {
+      setSalvando(false)
+    }
+  }
+
+  if (editando) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          ref={selectRef}
+          value={valor}
+          onChange={(e) => { setValor(e.target.value); if (e.target.value !== '__novo__') salvar(e.target.value) }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setEditando(false); setValor(segmento) } }}
+          onBlur={() => { if (valor === '__novo__') return; setEditando(false); setValor(segmento) }}
+          disabled={salvando}
+          className="rounded-md border border-brand-300 px-2 py-1 text-sm font-medium text-gray-800 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        >
+          {lista.map((seg) => <option key={seg} value={seg}>{seg}</option>)}
+          <option value="__novo__">Novo segmento…</option>
+        </select>
+
+        {valor === '__novo__' && (
+          <input
+            ref={inputRef}
+            autoFocus
+            value={novoCustom}
+            onChange={(e) => setNovoCustom(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') salvar(novoCustom)
+              if (e.key === 'Escape') { setEditando(false); setValor(segmento) }
+            }}
+            placeholder="Nome do segmento"
+            maxLength={60}
+            disabled={salvando}
+            className="rounded-md border border-brand-300 px-2 py-1 text-sm text-gray-800 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditando(true)}
+      title="Clique para alterar segmento"
+      className="rounded focus:outline-none focus:ring-2 focus:ring-brand-400"
+    >
+      <SegmentoBadge segmento={segmento} showTooltip tooltipDirection="below" />
+    </button>
+  )
+}
+
 export default function FichaPage() {
   const params = useParams<{ id: string }>()
   const [item, setItem] = useState<HistoricoDetalhe | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [segmentos, setSegmentos] = useState<string[]>([])
 
   useEffect(() => {
     let mounted = true
@@ -86,7 +169,11 @@ export default function FichaPage() {
       setError(null)
 
       try {
-        const [response, historico] = await Promise.all([getFicha(params.id), getHistorico().catch(() => ({ historico: [] }))])
+        const [response, historico, statsData] = await Promise.all([
+          getFicha(params.id),
+          getHistorico().catch(() => ({ historico: [] })),
+          getStats().catch(() => null),
+        ])
         const resumo = historico.historico.find((registro) => registro.id === params.id)
         if (mounted) {
           setItem({
@@ -97,6 +184,7 @@ export default function FichaPage() {
             objeto: response.objeto || resumo?.objeto || '',
             valor: response.valor || resumo?.valor || '',
           })
+          if (statsData?.segmentos_lista) setSegmentos(statsData.segmentos_lista)
         }
       } catch (err) {
         if (mounted) setError(err instanceof Error ? err.message : 'Analise nao encontrada')
@@ -144,8 +232,13 @@ export default function FichaPage() {
         <>
           <header className="mb-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <SegmentoBadge segmento={item.segmento} showTooltip />
-              <ScoreBadge score={item.score || 0} breakdown={extrairJustificativas(item.ficha || '')} />
+              <SegmentoEditavel
+                id={params.id}
+                segmento={item.segmento}
+                segmentos={segmentos}
+                onSave={(seg) => setItem((prev) => prev ? { ...prev, segmento: seg } : prev)}
+              />
+              <ScoreBadge score={item.score || 0} breakdown={extrairJustificativas(item.ficha || '')} tooltipDirection="below" />
               {item.timestamp ? <span className="text-sm text-gray-500">{formatarData(item.timestamp)}</span> : null}
             </div>
             <NomeEditavel id={params.id} nome={item.nome || item.orgao || ''} />

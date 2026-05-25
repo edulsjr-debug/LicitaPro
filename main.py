@@ -2003,6 +2003,10 @@ def _reclassificar_historico():
             if r.get("nome") != novo_nome:
                 r["nome"] = novo_nome
                 mudou = True
+        if "tamanho_total_bytes" not in r:
+            total = sum((a.get("tamanho_bytes") or 0) for a in (r.get("arquivos") or []))
+            r["tamanho_total_bytes"] = total
+            mudou = True
     if mudou:
         _salvar_historico()
 
@@ -2141,17 +2145,18 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
     analise_id = uuid.uuid4().hex[:10]
     anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
     registro = {
-        "id":        analise_id,
-        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "nome":      _gerar_nome_edital(ficha),
-        "orgao":     _extrair_orgao_ficha(ficha),
-        "valor":     extrair_campo(ficha, "Valor Estimado Total"),
-        "objeto":    extrair_objeto(ficha),
-        "segmento":  detectar_segmento(ficha),
-        "score":     extrair_score(ficha),
-        "ficha":     ficha,
-        "arquivos":  anexos,
-        "fonte":     fonte,
+        "id":                 analise_id,
+        "timestamp":          datetime.datetime.now().isoformat(timespec="seconds"),
+        "nome":               _gerar_nome_edital(ficha),
+        "orgao":              _extrair_orgao_ficha(ficha),
+        "valor":              extrair_campo(ficha, "Valor Estimado Total"),
+        "objeto":             extrair_objeto(ficha),
+        "segmento":           detectar_segmento(ficha),
+        "score":              extrair_score(ficha),
+        "ficha":              ficha,
+        "arquivos":           anexos,
+        "fonte":              fonte,
+        "tamanho_total_bytes": sum(len(c) for _, c in (arquivos_raw or [])),
     }
     _historico.insert(0, registro)
     if len(_historico) > 500:
@@ -2178,6 +2183,69 @@ PROVEDORES_GRANDE = [
     ("gemini", "gemini-2.5-flash",        400_000),
     (_groq,    "llama-3.3-70b-versatile",  32_000),
 ]
+
+
+async def _gemini_texto_livre(prompt: str, modelo: str = "gemini-2.5-flash-lite") -> str:
+    """Chama Gemini com prompt livre e retorna texto bruto."""
+    if not _gemini_api_key:
+        raise HTTPException(503, "GEMINI_API_KEY nao configurada.")
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": _gemini_api_key},
+        method="POST",
+    )
+    def _do():
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read().decode("utf-8")
+    try:
+        raw = await asyncio.to_thread(_do)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        raise HTTPException(e.code, f"Gemini: {body or str(e)}")
+    except urllib.error.URLError as e:
+        raise HTTPException(500, f"Gemini conexão: {e.reason}")
+    data = json.loads(raw)
+    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
+_SEGMENTOS_DEFAULT = [
+    "Segurança", "Limpeza e Conservação", "Alimentação", "Saúde",
+    "Educação", "Obras e Infraestrutura", "Tecnologia e TI", "Transporte",
+    "Viagens e Passagens", "Eventos e Capacitação", "Mobiliário e Escritório", "Outros",
+]
+
+async def _segmentar_lote_gemini(lote: list[tuple[str, str]]) -> dict[str, str]:
+    """Recebe lista de (id, objeto), retorna dict {id: segmento}."""
+    itens_txt = "\n\n".join(
+        f"ID: {id_}\nObjeto: {obj[:400]}" for id_, obj in lote
+    )
+    segs = ", ".join(_SEGMENTOS_DEFAULT[:-1])
+    prompt = (
+        f"Classifique cada licitação abaixo em um segmento.\n"
+        f"Use um dos segmentos sugeridos ou crie um nome novo (máx. 4 palavras, português).\n"
+        f"Segmentos sugeridos: {segs}.\n\n"
+        f"Responda APENAS em JSON válido (sem markdown), formato:\n"
+        f'[{{"id":"...","segmento":"..."}}]\n\n'
+        f"Licitações:\n{itens_txt}"
+    )
+    try:
+        raw = await _gemini_texto_livre(prompt)
+        # extrai JSON mesmo se vier com ```json...```
+        m = re.search(r"\[[\s\S]+\]", raw)
+        if not m:
+            return {}
+        dados = json.loads(m.group(0))
+        return {item["id"]: item["segmento"] for item in dados if "id" in item and "segmento" in item}
+    except Exception as e:
+        logger.warning("Erro ao segmentar lote: %s", e, extra={"request_id": "-"})
+        return {}
 
 
 async def _chamar_gemini_http(texto: str, num_docs: int, modelo: str) -> str:
@@ -2827,6 +2895,50 @@ async def renomear_analise(id: str, body: _RenomearBody):
     raise HTTPException(404, "Análise não encontrada.")
 
 
+class _SegmentoBody(BaseModel):
+    segmento: str
+
+@app.patch("/historico/{id}/segmento")
+async def atualizar_segmento(id: str, body: _SegmentoBody):
+    seg = body.segmento.strip()[:80]
+    if not seg:
+        raise HTTPException(400, "Segmento não pode ser vazio.")
+    for r in _historico:
+        if r["id"] == id:
+            r["segmento"] = seg
+            _salvar_historico()
+            return {"ok": True, "segmento": seg}
+    raise HTTPException(404, "Análise não encontrada.")
+
+
+@app.post("/api/resegmentar-ia")
+async def resegmentar_ia():
+    if not _gemini_api_key:
+        raise HTTPException(503, "GEMINI_API_KEY nao configurada.")
+    if not _historico:
+        return {"atualizados": 0, "total": 0}
+
+    lote_size = 8
+    atualizados = 0
+    total = len(_historico)
+
+    for i in range(0, total, lote_size):
+        lote = [(r["id"], r.get("objeto") or r.get("ficha", "")[:400])
+                for r in _historico[i:i + lote_size]]
+        resultado = await _segmentar_lote_gemini(lote)
+        for r in _historico[i:i + lote_size]:
+            novo = resultado.get(r["id"])
+            if novo and novo != r.get("segmento"):
+                r["segmento"] = novo
+                atualizados += 1
+        if i + lote_size < total:
+            await asyncio.sleep(1.5)  # evita rate limit
+
+    if atualizados:
+        _salvar_historico()
+    return {"atualizados": atualizados, "total": total}
+
+
 @app.get("/historico/{id}/arquivos/{arquivo_id}")
 async def baixar_arquivo_historico(id: str, arquivo_id: str):
     if _usa_supabase_api():
@@ -2925,12 +3037,16 @@ async def get_stats():
     )
     segmentos_top = dict(seg_counter.most_common(5))
 
+    segs_custom = sorted({r.get("segmento") for r in _historico if r.get("segmento")})
+    segmentos_lista = sorted(set(_SEGMENTOS_DEFAULT) | set(segs_custom))
+
     return {
         **_stats,
         "historico_n": len(_historico),
         "score_medio": score_medio,
         "score_distribuicao": dist,
         "segmentos_top": segmentos_top,
+        "segmentos_lista": segmentos_lista,
         "versao": APP_VERSION_LABEL,
         "commit": APP_COMMIT_LABEL,
         "limite_diario": LIMITE_DIARIO,

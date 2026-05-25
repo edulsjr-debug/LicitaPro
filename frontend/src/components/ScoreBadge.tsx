@@ -11,7 +11,7 @@ function scoreMeta(score: number) {
   return { label: 'Baixa', className: 'bg-red-100 text-red-700 ring-red-200' }
 }
 
-export function ScoreBadge({ score, breakdown }: { score: number; breakdown?: string[] }) {
+export function ScoreBadge({ score, breakdown, tooltipDirection = 'above' }: { score: number; breakdown?: string[]; tooltipDirection?: 'above' | 'below' }) {
   const meta = scoreMeta(score)
 
   const badge = (
@@ -31,6 +31,7 @@ export function ScoreBadge({ score, breakdown }: { score: number; breakdown?: st
 
   return (
     <Tooltip
+      direction={tooltipDirection}
       content={
         <div>
           <p className="mb-2 font-semibold text-white">Score de Viabilidade</p>

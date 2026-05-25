@@ -276,12 +276,13 @@ def extrair_orgao(texto: str) -> str:
             continue
         valor = _limpar_linha(
             re.split(
-                r"\b(?:projeto|endere[cç]o|cidade|uf|cnpj|telefone|e-?mail)\b\s*:?",
+                r"\b(?:projeto|endere[cç]o|cidade|uf|cnpj|telefone|e-?mail|modalidade|crit[eé]rio|valor\s+estimado|data\s+de\s+abertura|objeto)\b\s*:?",
                 valor,
                 maxsplit=1,
                 flags=re.IGNORECASE,
             )[0]
         )
+        valor = re.sub(r"\s*[-–]\s*$", "", valor).strip()
         if _normalizar(valor).endswith(" para"):
             for prox in cabecalho[match.end():].splitlines()[:4]:
                 prox_limpa = _limpar_linha(prox)
@@ -611,9 +612,19 @@ def extrair_data_abertura(texto: str) -> str:
 
 
 def extrair_prazo_vigencia(texto: str) -> str:
+    # aceita "12 meses", "12 (doze) meses", "12(doze) meses"
+    _num_unidade = r"(\d+)\s*(?:\([^)]{1,20}\))?\s*(dias?|meses?|anos?)"
     padroes = [
-        r"(?:vigência|vigencia|prazo\s+de\s+vigência|prazo\s+de\s+vigencia)[^\n]{0,80}?(\d+)\s*(dias?|meses?|anos?)",
-        r"contrato[^\n]{0,120}?(\d+)\s*(dias?|meses?|anos?)",
+        # "vigência de 12 (doze) meses" — mesma linha
+        r"(?:vigência|vigencia|prazo\s+de\s+vigên[cç]ia|prazo\s+de\s+vigencia)[^\n]{0,80}?" + _num_unidade,
+        # vigência com número na linha seguinte
+        r"(?:vigência|vigencia|prazo\s+de\s+vigên[cç]ia)[^\n]{0,40}?\n\s*" + _num_unidade,
+        # "prazo: 12 meses"
+        r"\bprazo\s*[:\-]\s*" + _num_unidade,
+        # "duração de 12 meses"
+        r"\bdura[cç][ãa]o\s+(?:de\s+)?" + _num_unidade,
+        # fallback genérico
+        r"contrato[^\n]{0,120}?" + _num_unidade,
     ]
     for padrao in padroes:
         match = re.search(padrao, texto, re.IGNORECASE)

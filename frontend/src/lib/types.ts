@@ -8,6 +8,7 @@ export interface HistoricoItem {
   segmento: string
   score: number
   arquivos?: HistoricoArquivo[]
+  tamanho_total_bytes?: number
 }
 
 export interface HistoricoDetalhe extends HistoricoItem {
@@ -43,6 +44,7 @@ export interface StatsResponse {
   score_medio?: number
   score_distribuicao?: { alta: number; media: number; baixa: number }
   segmentos_top?: Record<string, number>
+  segmentos_lista?: string[]
   historico_n?: number
   limite_diario?: number
   analises_hoje: number

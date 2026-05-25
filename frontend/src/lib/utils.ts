@@ -80,6 +80,35 @@ export function horaCurta(iso: string): string {
   return new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }).format(date)
 }
 
+/**
+ * Estima minutos de leitura+análise humana a partir do tamanho total dos arquivos.
+ * Calibração: ~1 min por 15KB (documentos técnicos complexos).
+ * Mínimo 15 min (qualquer edital exige atenção), máximo 180 min.
+ * Para análises de texto sem arquivo (bytes=0): retorna 20 min como base.
+ */
+export function estimarMinutos(bytes: number): number {
+  if (!bytes) return 20
+  return Math.min(180, Math.max(15, Math.round(bytes / 15_000)))
+}
+
+/** "R$ 2.000.000,00" → 2000000  |  retorna 0 se não parsear */
+export function parseValorBRL(valor: string | undefined): number {
+  if (!valor) return 0
+  const m = valor.match(/([\d.,]+)/)
+  if (!m) return 0
+  const n = parseFloat(m[1].replace(/\./g, '').replace(',', '.'))
+  return Number.isFinite(n) ? n : 0
+}
+
+/** 2000000 → "R$ 2,0 mi"  |  9500000000 → "R$ 9,5 bi" */
+export function formatarMoedaBRL(valor: number): string {
+  if (valor === 0) return 'R$ 0'
+  if (valor >= 1_000_000_000) return `R$ ${(valor / 1_000_000_000).toFixed(1).replace('.', ',')} bi`
+  if (valor >= 1_000_000) return `R$ ${(valor / 1_000_000).toFixed(1).replace('.', ',')} mi`
+  if (valor >= 1_000) return `R$ ${(valor / 1_000).toFixed(0)} mil`
+  return `R$ ${valor.toFixed(0)}`
+}
+
 export function diaGrupo(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso || 'Sem data'

@@ -69,6 +69,7 @@ export async function analisarArquivos(
     const pollUrl = `${BASE}/analisar/job/${job_id}`
     try {
       const poll = await fetch(pollUrl)
+      if (poll.status === 404) throw new Error('Servidor reiniciado durante a análise. Tente novamente.')
       if (!poll.ok) { recordError(pollUrl, 'GET', `HTTP ${poll.status}`, poll.status); continue }
       const job = await poll.json() as { status: string; error?: string; progresso?: string } & AnalisarResponse
       if (job.progresso && onProgresso) onProgresso(job.progresso)
@@ -126,6 +127,18 @@ export async function getStats(): Promise<StatsResponse> {
 
 export async function reclassificar(): Promise<{ atualizados: number; total: number }> {
   return request('/api/reclassificar', { method: 'POST' })
+}
+
+export async function resegmentarIA(): Promise<{ atualizados: number; total: number }> {
+  return request('/api/resegmentar-ia', { method: 'POST' })
+}
+
+export async function atualizarSegmento(id: string, segmento: string): Promise<{ ok: boolean; segmento: string }> {
+  return request(`/historico/${id}/segmento`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segmento }),
+  })
 }
 
 export async function getLogs(limit = 100): Promise<{ log: string[]; errors: string[] }> {

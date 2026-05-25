@@ -33,7 +33,7 @@ function normalizeSegmento(segmento: string) {
     .replace(/Ã³/g, 'o')
 }
 
-export function SegmentoBadge({ segmento, showTooltip = false }: { segmento: string; showTooltip?: boolean }) {
+export function SegmentoBadge({ segmento, showTooltip = false, tooltipDirection = 'above' }: { segmento: string; showTooltip?: boolean; tooltipDirection?: 'above' | 'below' }) {
   const normalized = normalizeSegmento(segmento || 'Outros')
   const className = segmentoClasses[normalized] ?? segmentoClasses.Outros
 
@@ -52,6 +52,7 @@ export function SegmentoBadge({ segmento, showTooltip = false }: { segmento: str
 
   return (
     <Tooltip
+      direction={tooltipDirection}
       content={
         <div>
           <p className="mb-1.5 font-semibold text-white">Segmento</p>
