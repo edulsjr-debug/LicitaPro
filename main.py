@@ -278,7 +278,24 @@ def _server_logs_html() -> str:
     </div>
     """
 
-app = FastAPI(title="Proxy LicitaÃ§Ã£o")
+async def _keepalive_loop():
+    """Pinga o banco a cada 6h para evitar que o Supabase pause (free tier pausa após 7 dias sem atividade)."""
+    while True:
+        await asyncio.sleep(6 * 3600)
+        try:
+            _check_db_ok()
+            logger.info("keepalive: banco OK", extra={"request_id": "-"})
+        except Exception as e:
+            logger.warning("keepalive: erro ao pingar banco: %s", e, extra={"request_id": "-"})
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app_):
+    asyncio.create_task(_keepalive_loop())
+    yield
+
+app = FastAPI(title="Proxy LicitaÃ§Ã£o", lifespan=lifespan)
 
 import datetime
 
