@@ -2910,10 +2910,27 @@ async def health():
 async def get_stats():
     scores = [r.get("score", 0) for r in _historico if r.get("score")]
     score_medio = round(sum(scores) / len(scores)) if scores else 0
+
+    dist = {"alta": 0, "media": 0, "baixa": 0}
+    for s in scores:
+        if s >= 75:   dist["alta"]  += 1
+        elif s >= 40: dist["media"] += 1
+        else:         dist["baixa"] += 1
+
+    from collections import Counter
+    seg_counter = Counter(
+        r.get("segmento", "Outros")
+        for r in _historico
+        if r.get("segmento") and r["segmento"] not in ("", "Outros")
+    )
+    segmentos_top = dict(seg_counter.most_common(5))
+
     return {
         **_stats,
         "historico_n": len(_historico),
         "score_medio": score_medio,
+        "score_distribuicao": dist,
+        "segmentos_top": segmentos_top,
         "versao": APP_VERSION_LABEL,
         "commit": APP_COMMIT_LABEL,
         "limite_diario": LIMITE_DIARIO,

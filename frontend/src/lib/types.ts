@@ -41,6 +41,8 @@ export interface StatsResponse {
   tokens_output_total: number
   custo_usd_total: number
   score_medio?: number
+  score_distribuicao?: { alta: number; media: number; baixa: number }
+  segmentos_top?: Record<string, number>
   historico_n?: number
   limite_diario?: number
   analises_hoje: number

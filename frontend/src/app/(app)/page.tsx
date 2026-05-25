@@ -68,7 +68,13 @@ export default function HomePage() {
 
   const totalSalvo = stats?.historico_n ?? historico.length
   const limiteDiario = stats?.limite_diario ?? 20
-  const altaViabilidade = historico.filter((item) => (item.score || 0) >= 75).length
+  const altaViabilidade = stats?.score_distribuicao?.alta ?? historico.filter((item) => (item.score || 0) >= 75).length
+  const mediaViabilidade = stats?.score_distribuicao?.media ?? historico.filter((item) => { const s = item.score || 0; return s >= 40 && s < 75 }).length
+  const baixaViabilidade = stats?.score_distribuicao?.baixa ?? historico.filter((item) => (item.score || 0) < 40 && (item.score || 0) > 0).length
+  const custoTotal = stats?.custo_usd_total ?? 0
+  const tokensTotal = (stats?.tokens_input_total ?? 0) + (stats?.tokens_output_total ?? 0)
+  const segmentosTop = stats?.segmentos_top ?? {}
+  const topSegmento = Object.entries(segmentosTop).sort((a, b) => b[1] - a[1])[0]
 
   return (
     <div>
@@ -100,24 +106,62 @@ export default function HomePage() {
         </section>
       ) : (
         <>
-          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <StatCard
-              label="Analises hoje"
+              label="Análises hoje"
               value={
                 <>
                   {stats?.analises_hoje ?? 0}
                   <span className="ml-1 text-base font-medium text-gray-400">/ {limiteDiario}</span>
                 </>
               }
-              sub="Reseta a meia-noite"
-            />
-            <StatCard label="Total salvo" value={totalSalvo} sub="analises no historico" />
-            <StatCard label="Alta viabilidade" value={altaViabilidade} sub={`score >= 75 de ${totalSalvo}`} />
-            <StatCard label="Score medio" value={scoreMedio || '-'}>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-100">
-                <div className={clsx('h-full rounded-full', scoreColor(scoreMedio))} style={{ width: `${Math.min(100, scoreMedio)}%` }} />
+              sub="Limite diário — reseta à meia-noite"
+            >
+              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-gray-100">
+                <div className="h-full rounded-full bg-brand-500 transition-all" style={{ width: `${Math.min(100, ((stats?.analises_hoje ?? 0) / limiteDiario) * 100)}%` }} />
               </div>
             </StatCard>
+
+            <StatCard label="Total no histórico" value={totalSalvo} sub={`${altaViabilidade} de alta viabilidade (≥ 75)`}>
+              {totalSalvo > 0 ? (
+                <div className="mt-3 flex h-2 overflow-hidden rounded-full">
+                  <div className="bg-green-500 transition-all" style={{ width: `${(altaViabilidade / totalSalvo) * 100}%` }} title={`Alta: ${altaViabilidade}`} />
+                  <div className="bg-yellow-400 transition-all" style={{ width: `${(mediaViabilidade / totalSalvo) * 100}%` }} title={`Média: ${mediaViabilidade}`} />
+                  <div className="flex-1 bg-red-400" title={`Baixa: ${baixaViabilidade}`} />
+                </div>
+              ) : null}
+            </StatCard>
+
+            <StatCard label="Score médio" value={scoreMedio || '—'}>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-100">
+                <div className={clsx('h-full rounded-full transition-all', scoreColor(scoreMedio))} style={{ width: `${Math.min(100, scoreMedio)}%` }} />
+              </div>
+              {totalSalvo > 0 ? (
+                <div className="mt-2 flex gap-3 text-xs text-gray-500">
+                  <span className="text-green-600">{altaViabilidade} alta</span>
+                  <span className="text-yellow-600">{mediaViabilidade} média</span>
+                  <span className="text-red-500">{baixaViabilidade} baixa</span>
+                </div>
+              ) : null}
+            </StatCard>
+
+            <StatCard
+              label="Custo IA acumulado"
+              value={custoTotal > 0 ? `$${custoTotal.toFixed(4)}` : '$0'}
+              sub={tokensTotal > 0 ? `${(tokensTotal / 1000).toFixed(1)}k tokens consumidos` : 'Nenhum token consumido ainda'}
+            />
+
+            <StatCard
+              label="Segmento mais analisado"
+              value={topSegmento ? topSegmento[0] : '—'}
+              sub={topSegmento ? `${topSegmento[1]} edital${topSegmento[1] > 1 ? 'is' : ''}` : 'Sem dados'}
+            />
+
+            <StatCard
+              label="Provedores de IA"
+              value={Object.keys(stats?.por_provedor ?? {}).length || '—'}
+              sub={Object.entries(stats?.por_provedor ?? {}).sort((a, b) => b[1].analises - a[1].analises)[0]?.[0] ?? 'Nenhum uso ainda'}
+            />
           </section>
 
           <section className="mt-8">
