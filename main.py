@@ -561,7 +561,7 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .page-eyebrow{font-size:11px;color:var(--brand-500);font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
 .page-title{font-size:32px;font-weight:700;letter-spacing:-.025em;color:var(--fg-1);line-height:1.15}
 .page-sub{margin-top:6px;font-size:15px;color:var(--fg-2)}
-.page-header{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:32px;flex-wrap:wrap}
+.page-header{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:32px}
 .stats-grid{display:grid;gap:14px;margin-bottom:28px}
 .g4{grid-template-columns:repeat(4,1fr)}
 .g3{grid-template-columns:repeat(3,1fr)}
@@ -645,7 +645,7 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 #toast{position:fixed;bottom:24px;right:24px;z-index:1000;display:flex;flex-direction:column;gap:8px}
 .toast-item{background:var(--ink-900);color:#fff;padding:12px 16px;border-radius:var(--radius-md);font-size:13px;font-weight:500;box-shadow:var(--shadow-lg);animation:toastIn 200ms var(--ease-out)}
 @keyframes toastIn{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
-.hist-table{background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);overflow-x:auto;box-shadow:var(--shadow-sm)}
+.hist-table{background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-sm)}
 .hist-table table{width:100%;border-collap?se:collap?se}
 .hist-table th{padding:12px 20px;text-align:left;border-bottom:1px solid var(--border);background:var(--ink-50);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-3)}
 .hist-table td{padding:13px 20px;border-bottom:1px solid var(--border-subtle);font-size:14px;font-variant-numeric:tabular-nums;color:var(--fg-1)}
@@ -654,28 +654,18 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 .empty-state{text-align:center;padding:64px 32px;color:var(--fg-3)}
 .empty-title{font-size:16px;font-weight:600;color:var(--fg-2);margin-top:16px;margin-bottom:6px}
 .empty-sub{font-size:14px}
-.action-row{display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;margin-top:32px;padding-top:24px;border-top:1px solid var(--border-subtle)}
+.action-row{display:flex;gap:12px;justify-content:flex-end;margin-top:32px;padding-top:24px;border-top:1px solid var(--border-subtle)}
 @media(max-width:900px){
   .page{padding:24px 20px}
   .g4{grid-template-columns:1fr 1fr}
   .edital-card{grid-template-columns:56px 1fr}
   .edital-right{display:none}
 }
-.mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:50;background:var(--bg);border-top:1px solid var(--border-subtle);grid-template-columns:repeat(4,1fr)}
-.mob-nav-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:8px 4px 10px;background:transparent;border:none;color:var(--fg-4);font-size:10px;font-weight:500;font-family:var(--font-sans);cursor:pointer;transition:color 120ms;width:100%}
-.mob-nav-btn.active{color:var(--brand-600)}
-.mob-nav-btn svg{flex-shrink:0;width:20px;height:20px}
-.grid-r3{grid-template-columns:repeat(3,1fr)}
 @media(max-width:640px){
   .sidebar{display:none}
-  .main-content{margin-left:0;padding-bottom:72px}
+  .main-content{margin-left:0}
   .g4,.g3{grid-template-columns:1fr 1fr}
   .page{padding:20px 16px}
-  .mob-nav{display:grid}
-  .processing-card{padding:32px 20px}
-  .grid-r3{grid-template-columns:1fr}
-  .detalhe-header{flex-wrap:wrap}
-  .detalhe-score{margin:0 auto}
 }
 </style>
 </head>
@@ -718,24 +708,6 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
 <div class="main-content" id="main-content"></div>
 </div>
 
-<nav class="mob-nav" id="mob-nav">
-  <button class="mob-nav-btn active" id="mobnav-editais" data-page="editais">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/></svg>
-    Editais
-  </button>
-  <button class="mob-nav-btn" id="mobnav-upload" data-page="upload">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-    Novo
-  </button>
-  <button class="mob-nav-btn" id="mobnav-historico" data-page="historico">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-    Histórico
-  </button>
-  <button class="mob-nav-btn" id="mobnav-logs" data-page="logs">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h16"/></svg>
-    Logs
-  </button>
-</nav>
 <div id="toast"></div>
 <input type="file" id="file-input" multiple accept=".pdf,.docx,.xlsx,.xls,.txt" style="display:none">
 
@@ -783,11 +755,8 @@ function navigateTo(page){
 function showPage(page,data){
   _filter=page==='editais'?_filter:'todos';
   document.querySelectorAll('.nav-item').forEach(function(el){el.classList.remove('active')});
-  document.querySelectorAll('.mob-nav-btn').forEach(function(el){el.classList.remove('active')});
   var nav=document.getElementById('nav-'+page);
   if(nav)nav.classList.add('active');
-  var mobnav=document.getElementById('mobnav-'+page);
-  if(mobnav)mobnav.classList.add('active');
   var mc=document.getElementById('main-content');
   if(page==='editais')renderEditaisPage(mc);
   else if(page==='upload')renderUploadPage(mc);
@@ -848,7 +817,7 @@ async function openEdital(id){
 }
 
 function renderUploadPage(mc){
-  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><label class="dropzone" id="dropzone" for="file-input"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></label><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div class="stats-grid grid-r3" style="margin-top:24px;gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">MÃºltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
+  mc.innerHTML=`<div class="page"><div class="page-header"><div><h1 class="page-title">Novo edital</h1><p class="page-sub">Envie o PDF do edital. A IA extrai objeto, exigências, valores, prazos e calcula o score de viabilidade.</p></div></div><label class="dropzone" id="dropzone" for="file-input"><div class="dz-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></div><div class="dz-title">Arraste o edital ou clique para enviar</div><div class="dz-sub">PDF · DOCX · XLSX · XLS · TXT · múltiplos arquivos simultâneos</div></label><div class="file-list" id="file-list"></div><button class="btn btn-primary" id="btn-analisar" style="width:100%;margin-top:20px;justify-content:center;display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Analisar edital</button><div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px"><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">PDF com texto</div><div style="font-size:12px;color:var(--fg-3)">Use o arquivo original do portal, não escaneado.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">MÃºltiplos arquivos</div><div style="font-size:12px;color:var(--fg-3)">Envie edital + anexos juntos para análise completa.</div></div><div style="padding:16px;background:var(--bg-subtle);border-radius:12px;border:1px solid var(--border-subtle)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Score automático</div><div style="font-size:12px;color:var(--fg-3)">A IA calcula viabilidade 0–100 e lista exigências.</div></div></div></div>`;
   var dz=document.getElementById('dropzone');
   dz.ondragover=function(e){e.preventDefault();dz.classList.add('over')};
   dz.ondragleave=function(){dz.classList.remove('over')};
@@ -985,13 +954,13 @@ function renderDetalhePage(mc,r){
 
   mc.innerHTML=
     `<div class="page"><button class="back-btn" data-page="editais"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>Voltar para editais</button>` +
-    `<div class="detalhe-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px"><div style="flex:1;min-width:0"><div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">` +
+    `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px;margin-bottom:32px"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">` +
     (r.timestamp?`<span style="font-family:var(--font-mono);font-size:12px;color:var(--fg-3)">${fmtDate(r.timestamp)}</span>`:'') +
     (r.segmento?badge(r.segmento,'badge-brand'):'') +
     (r.score>=85?badge('PRIORITÃRIO','badge-solid'):'') +
     `</div><h1 style="font-size:28px;font-weight:700;letter-spacing:-.025em;line-height:1.2;margin-bottom:8px">${escHtml(r.objeto||'Análise de edital')}</h1>` +
     `<p style="font-size:15px;color:var(--fg-2)">${escHtml(r.orgao||'')}</p></div>` +
-    (r.score?`<div class="detalhe-score" style="flex-shrink:0;text-align:center">${scoreRing(r.score,120)}<div style="margin-top:8px;font-size:13px;font-weight:600;color:${scoreColor(r.score)}">Viabilidade ${scoreLabel(r.score)}</div></div>`:'') +
+    (r.score?`<div style="flex-shrink:0;text-align:center">${scoreRing(r.score,120)}<div style="margin-top:8px;font-size:13px;font-weight:600;color:${scoreColor(r.score)}">Viabilidade ${scoreLabel(r.score)}</div></div>`:'') +
     `</div>` +
     `<div class="stats-grid g4" style="margin-bottom:40px"><div class="stat-card"><div class="lbl">Valor estimado</div><div class="val" style="font-size:18px">${escHtml(r.valor||'â€')}</div></div><div class="stat-card"><div class="lbl">Segmento</div><div class="val" style="font-size:18px">${escHtml(r.segmento||'â€')}</div></div><div class="stat-card"><div class="lbl">Score</div><div class="val" style="color:${r.score?scoreColor(r.score):'var(--fg-4)'}">${r.score||'â€'}</div><div class="sub">${r.score?scoreLabel(r.score)+' viabilidade':''}</div></div><div class="stat-card"><div class="lbl">Analisado em</div><div class="val" style="font-size:16px">${r.timestamp?new Date(r.timestamp).toLocaleDateString('pt-BR'):'â€'}</div></div></div>` +
     exigHTML +
