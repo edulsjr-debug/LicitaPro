@@ -23,7 +23,7 @@ body {
 /* Markdown rendered analysis */
 .ficha-md h2 { @apply text-base font-semibold mt-6 mb-2 text-gray-800 border-b border-gray-100 pb-1; }
 .ficha-md h3 { @apply text-sm font-semibold mt-4 mb-1 text-gray-700; }
-.ficha-md table { @apply w-full text-sm border-collapse my-3; }
+.ficha-md table { @apply w-full text-sm border-collapse my-3; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .ficha-md th { @apply bg-gray-50 font-semibold text-left px-3 py-2 border border-gray-200 text-xs uppercase tracking-wide text-gray-500; }
 .ficha-md td { @apply px-3 py-2 border border-gray-200 text-gray-700 align-top; }
 .ficha-md ul { @apply list-disc pl-5 space-y-1 text-sm text-gray-700; }

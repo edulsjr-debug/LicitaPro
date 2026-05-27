@@ -102,7 +102,7 @@ export default function LogsPage() {
           <h1 className="text-2xl font-semibold tracking-normal text-gray-950">Logs</h1>
           <p className="mt-1 text-sm text-gray-600">Atualizacao automatica em {countdown}s.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={reclassLoading}
