@@ -2187,7 +2187,7 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
         _historico.pop()
     persistido = _salvar_historico()
     aviso = None if persistido else "Análise gerada mas não foi possível salvar no histórico. Verifique a conexão com o banco."
-    return {"id": analise_id, "persistido": persistido, "aviso": aviso}
+    return {"id": analise_id, "score": registro["score"], "persistido": persistido, "aviso": aviso}
 
 
 MAX_CHARS = 400_000
@@ -3248,9 +3248,8 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))
             _jobs[job_id] = {"status": "done", "ficha": ficha, **meta, "_ts": time.monotonic()}
             # notificação fire-and-forget
-            score_val = int(_historico[0].get("score", 0)) if _historico else 0
             nome_arquivo = arquivos_raw[0][0] if arquivos_raw else "edital"
-            send_analysis_complete(nome_arquivo, score_val, meta["id"])
+            send_analysis_complete(nome_arquivo, int(meta.get("score", 0)), meta["id"])
         except Exception as e:
             detail = getattr(e, "detail", str(e))
             logger.error("Job %s falhou: %s", job_id, detail, extra={"request_id": request_id})
@@ -3273,8 +3272,7 @@ async def analisar(http_request: Request, request: AnalisarRequest):
     _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
     meta = registrar_analise(ficha)
-    score_val = int(_historico[0].get("score", 0)) if _historico else 0
-    send_analysis_complete("texto", score_val, meta["id"])
+    send_analysis_complete("texto", int(meta.get("score", 0)), meta["id"])
     _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     return AnalisarResponse(ficha=ficha, **meta)
 

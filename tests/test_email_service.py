@@ -23,6 +23,21 @@ def test_send_analysis_complete_chama_resend():
     assert payload["to"] == ["notificacoes@example.com"]
     assert "Score: 78" in payload["subject"]
     assert payload["from"] == "LicitaPRO <noreply@prumosaas.com.br>"
+    assert payload["html"]  # html presente e não vazio
+
+
+@pytest.mark.parametrize("score,expected_color", [
+    (75, "#22c55e"),  # >= 70 → verde
+    (55, "#f59e0b"),  # >= 40 → amarelo
+    (25, "#ef4444"),  # < 40  → vermelho
+])
+def test_score_color_thresholds(score, expected_color):
+    with patch("resend.Emails.send") as mock_send:
+        mock_send.return_value = {"id": "mock-id"}
+        email_service.send_analysis_complete("edital.pdf", score, "id_test")
+
+    html = mock_send.call_args[0][0]["html"]
+    assert expected_color in html
 
 
 def test_score_e_filename_no_html():

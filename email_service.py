@@ -1,3 +1,4 @@
+import html as _html_mod
 import os
 import resend
 
@@ -27,6 +28,7 @@ def send_analysis_complete(filename: str, score: int, analise_id: str) -> None:
 def _html(filename: str, score: int, analise_id: str) -> str:
     score_color = "#22c55e" if score >= 70 else "#f59e0b" if score >= 40 else "#ef4444"
     url = f"{_BASE_URL}/historico/{analise_id}"
+    safe_filename = _html_mod.escape(filename)
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head><meta charset="UTF-8"><style>
@@ -45,7 +47,7 @@ a.gold{{color:#B8924F;text-decoration:none}}
   <div class="c">
     <div class="logo">| LICITAPRO</div>
     <h1>Análise concluída.</h1>
-    <div class="fn">{filename}</div>
+    <div class="fn">{safe_filename}</div>
     <div class="score">{score}</div>
     <div class="sl">Score de viabilidade</div>
     <a href="{url}" class="btn">→ Ver análise completa</a>
