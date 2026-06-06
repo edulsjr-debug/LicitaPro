@@ -1667,58 +1667,95 @@ def _demo_calcular_estado(estado: dict, lead_autorizado: bool = False) -> dict:
 
 def _demo_buscar_estado(chave: str) -> dict:
     """Busca registro em demo_acessos. Retorna {} se não existe."""
-    if not _usa_supabase_api():
-        return {}
-    try:
-        resultado = _supabase_request(
-            f"/rest/v1/demo_acessos?id=eq.{chave}&select=*",
-            method="GET",
-        )
-        return resultado[0] if resultado else {}
-    except Exception:
-        logger.warning("demo_buscar_estado falhou para %s", chave)
-        return {}
+    if _usa_supabase_api():
+        try:
+            resultado = _supabase_request(
+                f"/rest/v1/demo_acessos?id=eq.{chave}&select=*",
+                method="GET",
+            )
+            return resultado[0] if resultado else {}
+        except Exception:
+            logger.warning("demo_buscar_estado (supabase) falhou para %s", chave)
+            return {}
+    if _DATABASE_URL:
+        try:
+            conn = _obter_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id,tipo,usos,ultimo_ip,tentativa_burla,lead_nome,lead_contato,"
+                "bonus_liberado,primeiro_acesso,ultimo_acesso "
+                "FROM demo_acessos WHERE id=%s",
+                (chave,),
+            )
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if not row:
+                return {}
+            cols = ["id","tipo","usos","ultimo_ip","tentativa_burla","lead_nome",
+                    "lead_contato","bonus_liberado","primeiro_acesso","ultimo_acesso"]
+            return dict(zip(cols, row))
+        except Exception:
+            logger.warning("demo_buscar_estado (pg) falhou para %s", chave)
+    return {}
 
 
 def _demo_upsert_estado(chave: str, tipo: str, ip: str, incrementar: bool = True,
                         burla: bool = False, lead_nome: str = None,
                         lead_contato: str = None, bonus_liberado: bool = False):
     """Cria ou atualiza registro em demo_acessos."""
-    if not _usa_supabase_api():
+    agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if _usa_supabase_api():
+        try:
+            payload: dict = {"id": chave, "tipo": tipo, "ultimo_ip": ip, "ultimo_acesso": agora}
+            if incrementar:
+                estado = _demo_buscar_estado(chave)
+                payload["usos"] = estado.get("usos", 0) + 1
+                if not estado:
+                    payload["primeiro_acesso"] = agora
+            if burla:
+                payload["tentativa_burla"] = True
+            if lead_nome:
+                payload["lead_nome"] = lead_nome
+            if lead_contato:
+                payload["lead_contato"] = lead_contato
+            if bonus_liberado:
+                payload["bonus_liberado"] = True
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            _supabase_request(
+                "/rest/v1/demo_acessos",
+                method="POST",
+                body=body,
+                extra_headers={"Prefer": "resolution=merge-duplicates"},
+            )
+        except Exception:
+            logger.warning("demo_upsert_estado (supabase) falhou para %s", chave)
         return
-    try:
-        agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        payload: dict = {
-            "id": chave,
-            "tipo": tipo,
-            "ultimo_ip": ip,
-            "ultimo_acesso": agora,
-        }
-        if incrementar:
-            # upsert com incremento via SQL não é direto na REST API —
-            # busca valor atual e incrementa
-            estado = _demo_buscar_estado(chave)
-            payload["usos"] = estado.get("usos", 0) + 1
-            if not estado:
-                payload["primeiro_acesso"] = agora
-        if burla:
-            payload["tentativa_burla"] = True
-        if lead_nome:
-            payload["lead_nome"] = lead_nome
-        if lead_contato:
-            payload["lead_contato"] = lead_contato
-        if bonus_liberado:
-            payload["bonus_liberado"] = True
-
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        _supabase_request(
-            "/rest/v1/demo_acessos",
-            method="POST",
-            body=body,
-            extra_headers={"Prefer": "resolution=merge-duplicates"},
-        )
-    except Exception:
-        logger.warning("demo_upsert_estado falhou para %s", chave)
+    if _DATABASE_URL:
+        try:
+            conn = _obter_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO demo_acessos (id,tipo,ultimo_ip,ultimo_acesso,primeiro_acesso)"
+                " VALUES (%s,%s,%s,%s,%s)"
+                " ON CONFLICT (id) DO UPDATE SET ultimo_ip=%s, ultimo_acesso=%s",
+                (chave, tipo, ip, agora, agora, ip, agora),
+            )
+            if incrementar:
+                cur.execute("UPDATE demo_acessos SET usos = usos + 1 WHERE id=%s", (chave,))
+            if burla:
+                cur.execute("UPDATE demo_acessos SET tentativa_burla=true WHERE id=%s", (chave,))
+            if lead_nome:
+                cur.execute("UPDATE demo_acessos SET lead_nome=%s WHERE id=%s", (lead_nome, chave))
+            if lead_contato:
+                cur.execute("UPDATE demo_acessos SET lead_contato=%s WHERE id=%s", (lead_contato, chave))
+            if bonus_liberado:
+                cur.execute("UPDATE demo_acessos SET bonus_liberado=true WHERE id=%s", (chave,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception:
+            logger.warning("demo_upsert_estado (pg) falhou para %s", chave)
 
 
 def _demo_verificar_e_registrar(ip: str, uid: str) -> dict:
@@ -3713,7 +3750,7 @@ async def demo_analisar(
     # Extrai score da ficha
     try:
         campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
-        score = calcular_score_viabilidade(campos)
+        score = calcular_score_viabilidade(campos)[0]
     except Exception:
         score = 0
 
@@ -3781,7 +3818,7 @@ async def demo_lead(
 
     try:
         campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
-        score = calcular_score_viabilidade(campos)
+        score = calcular_score_viabilidade(campos)[0]
     except Exception:
         score = 0
 
