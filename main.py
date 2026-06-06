@@ -3,6 +3,7 @@ import gc
 import html as _html
 import io
 import hashlib
+import hmac
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -1647,7 +1648,7 @@ def _demo_calcular_estado(estado: dict, lead_autorizado: bool = False) -> dict:
         return {"permitido": True, "precisa_lead": False, "bloqueado": False,
                 "usos_restantes": _DEMO_LIMITE_LIVRE - usos}
 
-    if usos == _DEMO_LIMITE_LIVRE and not bonus:
+    if usos >= _DEMO_LIMITE_LIVRE and not bonus:
         if lead_autorizado:
             return {"permitido": True, "precisa_lead": False, "bloqueado": False,
                     "usos_restantes": 0}
@@ -3681,8 +3682,7 @@ async def demo_analisar(
     # Extrai texto
     if arquivo and arquivo.filename:
         conteudo = await arquivo.read()
-        loop = asyncio.get_event_loop()
-        texto_edital = await loop.run_in_executor(
+        texto_edital = await asyncio.get_running_loop().run_in_executor(
             None, extrair_texto, arquivo.filename, conteudo
         )
     elif texto:
@@ -3749,8 +3749,7 @@ async def demo_lead(
     # Extrai texto
     if arquivo and arquivo.filename:
         conteudo = await arquivo.read()
-        loop = asyncio.get_event_loop()
-        texto_edital = await loop.run_in_executor(
+        texto_edital = await asyncio.get_running_loop().run_in_executor(
             None, extrair_texto, arquivo.filename, conteudo
         )
     elif texto:
@@ -3790,7 +3789,7 @@ async def demo_lead(
 
 @app.get("/admin/demo", response_class=HTMLResponse)
 async def admin_demo(request: Request, token: str = ""):
-    if not DEMO_ADMIN_TOKEN or token != DEMO_ADMIN_TOKEN:
+    if not DEMO_ADMIN_TOKEN or not hmac.compare_digest(token, DEMO_ADMIN_TOKEN):
         raise HTTPException(401, "Token inválido.")
 
     registros = []
@@ -3807,7 +3806,7 @@ async def admin_demo(request: Request, token: str = ""):
         burla = "⚠️ sim" if r.get("tentativa_burla") else "não"
         bonus = "✅ sim" if r.get("bonus_liberado") else "não"
         lead = f"{_html.escape(r.get('lead_nome') or '')} / {_html.escape(r.get('lead_contato') or '')}"
-        primeiro = (r.get("primeiro_acesso") or "")[:16].replace("T", " ")
+        primeiro = _html.escape((r.get("primeiro_acesso") or "")[:16].replace("T", " "))
         ultimo_ip = _html.escape(r.get("ultimo_ip") or "")
         rid = _html.escape(r.get("id") or "")
         tipo = _html.escape(r.get("tipo") or "")
