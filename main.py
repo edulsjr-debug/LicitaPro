@@ -176,6 +176,7 @@ def _shell_html(initial_page: str, main_html: str) -> str:
         HTML_PAGE
         .replace("{APP_VERSION_LABEL}", APP_VERSION_LABEL)
         .replace("{APP_COMMIT_LABEL}", APP_COMMIT_LABEL)
+        .replace("{POSTHOG_KEY_PLACEHOLDER}", _POSTHOG_KEY)
         .replace('<div class="main-content" id="main-content"></div>', f'<div class="main-content" id="main-content">{main_html}</div>')
     )
     if initial_page:
@@ -691,6 +692,11 @@ body{font-family:var(--font-sans);background:var(--bg-subtle);color:var(--fg-1);
   .page{padding:20px 16px}
 }
 </style>
+<script>
+var _lp_uid=(function(){var k='_lp_uid',v=localStorage.getItem(k);if(!v){v='lp-'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);localStorage.setItem(k,v);}return v;})();
+var _ph_key='{POSTHOG_KEY_PLACEHOLDER}';
+if(_ph_key){!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]);t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","").replace("https://","https://r.")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled onFeatureFlags getFeatureFlag getFeatureFlagPayload reloadFeatureFlags group updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures getActiveMatchingSurveys getSurveys getNextSurveyStep onSessionId setPersonPropertiesForFlags".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init(_ph_key,{api_host:'https://app.posthog.com',capture_pageview:true,persistence:'localStorage',bootstrap:{distinctID:_lp_uid}});}
+</script>
 </head>
 <body>
 <div class="app">
@@ -923,7 +929,7 @@ async function analisarArquivos(){
     if(!resp){
       var fd=new FormData();
       for(var i=0;i<_selectedFiles.length;i++)fd.append('arquivos',_selectedFiles[i]);
-      var res=await fetch('/analisar/arquivo',{method:'POST',body:fd});
+      var res=await fetch('/analisar/arquivo',{method:'POST',headers:{'x-posthog-id':_lp_uid},body:fd});
       if(!res.ok){var err=await res.json().catch(function(){return{detail:'Erro desconhecido'}});throw new Error(err.detail||'Erro ao analisar')}
       resp=await res.json();
     }
@@ -963,6 +969,7 @@ var exigIcons={
 };
 
 function renderDetalhePage(mc,r){
+  if(window.posthog)posthog.capture('edital_result_viewed');
   var exigs=parseExigencias(r.ficha);
   var exigHTML=exigs.length>0?
     `<div style="margin-top:40px"><h3 style="font-size:18px;font-weight:700;letter-spacing:-.015em;margin-bottom:6px">AnÃ¡lise de exigências</h3><p style="font-size:14px;color:var(--fg-2);margin-bottom:16px">${exigs.length} exigência(s) · ${exigs.filter(function(e){return e.status==='ok'}).length} ok · ${exigs.filter(function(e){return e.status==='warn'}).length} atenção · ${exigs.filter(function(e){return e.status==='fail'}).length} restritiva(s)</p>` +
