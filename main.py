@@ -1618,6 +1618,135 @@ def _usa_supabase_api() -> bool:
     return bool(_SUPABASE_URL and _SUPABASE_KEY)
 
 
+# ──────────────────────────────────────────────
+# Demo pública — helpers de rate limiting
+# ──────────────────────────────────────────────
+
+DEMO_ADMIN_TOKEN = os.getenv("DEMO_ADMIN_TOKEN", "")
+_DEMO_LIMITE_LIVRE = 3   # análises sem exigir lead
+_DEMO_LIMITE_TOTAL = 4   # total incluindo bônus
+
+
+def _demo_get_ip(request) -> str:
+    """Extrai IP real do visitante (Render injeta X-Forwarded-For)."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host or "unknown"
+
+
+def _demo_calcular_estado(estado: dict, lead_autorizado: bool = False) -> dict:
+    """
+    Dada uma linha de demo_acessos (ou dict vazio), retorna o estado de permissão.
+    Retorna: {permitido, precisa_lead, bloqueado, usos_restantes}
+    """
+    usos = estado.get("usos", 0)
+    bonus = estado.get("bonus_liberado", False)
+
+    if usos < _DEMO_LIMITE_LIVRE:
+        return {"permitido": True, "precisa_lead": False, "bloqueado": False,
+                "usos_restantes": _DEMO_LIMITE_LIVRE - usos}
+
+    if usos == _DEMO_LIMITE_LIVRE and not bonus:
+        if lead_autorizado:
+            return {"permitido": True, "precisa_lead": False, "bloqueado": False,
+                    "usos_restantes": 0}
+        return {"permitido": False, "precisa_lead": True, "bloqueado": False,
+                "usos_restantes": 0}
+
+    # usos >= 4 ou bonus já usado
+    return {"permitido": False, "precisa_lead": False, "bloqueado": True,
+            "usos_restantes": 0}
+
+
+def _demo_buscar_estado(chave: str) -> dict:
+    """Busca registro em demo_acessos. Retorna {} se não existe."""
+    if not _usa_supabase_api():
+        return {}
+    try:
+        resultado = _supabase_request(
+            f"/rest/v1/demo_acessos?id=eq.{chave}&select=*",
+            method="GET",
+        )
+        return resultado[0] if resultado else {}
+    except Exception:
+        logger.warning("demo_buscar_estado falhou para %s", chave)
+        return {}
+
+
+def _demo_upsert_estado(chave: str, tipo: str, ip: str, incrementar: bool = True,
+                        burla: bool = False, lead_nome: str = None,
+                        lead_contato: str = None, bonus_liberado: bool = False):
+    """Cria ou atualiza registro em demo_acessos."""
+    if not _usa_supabase_api():
+        return
+    try:
+        agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        payload: dict = {
+            "id": chave,
+            "tipo": tipo,
+            "ultimo_ip": ip,
+            "ultimo_acesso": agora,
+        }
+        if incrementar:
+            # upsert com incremento via SQL não é direto na REST API —
+            # busca valor atual e incrementa
+            estado = _demo_buscar_estado(chave)
+            payload["usos"] = estado.get("usos", 0) + 1
+            if not estado:
+                payload["primeiro_acesso"] = agora
+        if burla:
+            payload["tentativa_burla"] = True
+        if lead_nome:
+            payload["lead_nome"] = lead_nome
+        if lead_contato:
+            payload["lead_contato"] = lead_contato
+        if bonus_liberado:
+            payload["bonus_liberado"] = True
+
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        _supabase_request(
+            "/rest/v1/demo_acessos",
+            method="POST",
+            body=body,
+            extra_headers={"Prefer": "resolution=merge-duplicates"},
+        )
+    except Exception:
+        logger.warning("demo_upsert_estado falhou para %s", chave)
+
+
+def _demo_verificar_e_registrar(ip: str, uid: str) -> dict:
+    """
+    Verifica limite para IP e UUID. Retorna estado mais restritivo.
+    Detecta troca de IP com mesmo UUID (burla).
+    """
+    estado_ip = _demo_buscar_estado(f"ip:{ip}")
+    estado_uid = _demo_buscar_estado(f"uid:{uid}")
+
+    # Detectar burla: mesmo UID, IP diferente do último registrado
+    burla = False
+    if estado_uid and estado_uid.get("ultimo_ip") and estado_uid["ultimo_ip"] != ip:
+        burla = True
+        logger.warning("Demo: possível burla detectada uid=%s ip_atual=%s ip_anterior=%s",
+                       uid, ip, estado_uid["ultimo_ip"])
+        _demo_upsert_estado(f"uid:{uid}", "uid", ip, incrementar=False, burla=True)
+
+    calc_ip = _demo_calcular_estado(estado_ip)
+    calc_uid = _demo_calcular_estado(estado_uid)
+
+    # Usa o estado mais restritivo
+    if calc_ip["bloqueado"] or calc_uid["bloqueado"]:
+        return {"permitido": False, "precisa_lead": False, "bloqueado": True,
+                "usos_restantes": 0, "burla": burla}
+    if calc_ip["precisa_lead"] or calc_uid["precisa_lead"]:
+        return {"permitido": False, "precisa_lead": True, "bloqueado": False,
+                "usos_restantes": 0, "burla": burla}
+
+    usos_restantes = min(calc_ip["usos_restantes"], calc_uid["usos_restantes"])
+    return {"permitido": True, "precisa_lead": False, "bloqueado": False,
+            "usos_restantes": usos_restantes, "burla": burla}
+
+
 def _supabase_headers(content_type: Optional[str] = "application/json", extra: Optional[dict] = None) -> dict:
     headers = {
         "apikey": _SUPABASE_KEY,
