@@ -1,13 +1,19 @@
 import asyncio
+import gc
 import html as _html
 import io
 import hashlib
+import hmac
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
+import queue as _queue_module
 import re
+import threading as _threading_module
+import time
+import unicodedata
 import uuid
 import urllib.error
 import urllib.request
@@ -24,7 +30,7 @@ import docx
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -35,6 +41,7 @@ from parser_edital import (
     calcular_confianca,
     calcular_score_viabilidade,
 )
+from email_service import send_analysis_complete
 
 try:
     import fitz
@@ -93,6 +100,66 @@ def _configure_logging():
 
 _configure_logging()
 logger = logging.getLogger("licitapro")
+
+# Buffer de erros em memória — populado pelo handler abaixo e carregado do Supabase no boot
+_error_buffer: list[str] = []
+_ERROR_BUFFER_MAX = 500
+
+# Fila para gravação assíncrona no Supabase (worker thread separado)
+_log_queue: _queue_module.Queue = _queue_module.Queue(maxsize=2000)
+
+
+def _log_worker():
+    while True:
+        try:
+            item = _log_queue.get(timeout=30)
+            if item is None:
+                break
+            nivel, mensagem, request_id = item
+            try:
+                # _usa_supabase_api e _supabase_request definidos mais abaixo no módulo —
+                # resolvidos em tempo de chamada, não de definição
+                if not _usa_supabase_api():  # type: ignore[name-defined]
+                    continue
+                payload = json.dumps(
+                    {"nivel": nivel, "mensagem": mensagem[:2000], "request_id": request_id},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                _supabase_request("/rest/v1/logs", method="POST", body=payload)  # type: ignore[name-defined]
+            except Exception:
+                pass
+        except _queue_module.Empty:
+            pass
+        except Exception:
+            pass
+
+
+_log_thread = _threading_module.Thread(target=_log_worker, daemon=True, name="supabase-log-worker")
+_log_thread.start()
+
+
+class _SupabaseLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord):
+        try:
+            request_id = getattr(record, "request_id", "-")
+            ts = datetime.datetime.now().isoformat()[:19]
+            mensagem = record.getMessage()
+            entrada = f"[{ts}] [{record.levelname}] [{request_id}] {mensagem}"
+            _error_buffer.append(entrada)
+            if len(_error_buffer) > _ERROR_BUFFER_MAX:
+                _error_buffer.pop(0)
+            try:
+                _log_queue.put_nowait((record.levelname, mensagem[:2000], request_id))
+            except _queue_module.Full:
+                pass
+        except Exception:
+            pass
+
+
+_supabase_log_handler = _SupabaseLogHandler()
+_supabase_log_handler.setLevel(logging.WARNING)
+_supabase_log_handler.addFilter(_RequestIdFilter())
+logging.getLogger().addHandler(_supabase_log_handler)
 
 
 def _audit(event: str, request_id: str = "-", **fields):
@@ -214,7 +281,24 @@ def _server_logs_html() -> str:
     </div>
     """
 
-app = FastAPI(title="Proxy LicitaÃ§Ã£o")
+async def _keepalive_loop():
+    """Pinga o banco a cada 6h para evitar que o Supabase pause (free tier pausa após 7 dias sem atividade)."""
+    while True:
+        await asyncio.sleep(6 * 3600)
+        try:
+            _check_db_ok()
+            logger.info("keepalive: banco OK", extra={"request_id": "-"})
+        except Exception as e:
+            logger.warning("keepalive: erro ao pingar banco: %s", e, extra={"request_id": "-"})
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app_):
+    asyncio.create_task(_keepalive_loop())
+    yield
+
+app = FastAPI(title="Proxy LicitaÃ§Ã£o", lifespan=lifespan)
 
 import datetime
 
@@ -229,7 +313,10 @@ try:
     PARSER_MAX_CHARS_FALLBACK = int(os.getenv("PARSER_MAX_CHARS_FALLBACK", "80000"))
 except ValueError:
     PARSER_MAX_CHARS_FALLBACK = 80000
-OCR_HABILITADO = os.getenv("OCR_HABILITADO", "true").lower() not in ("0", "false", "no", "off")
+_is_render = bool(os.getenv("RENDER"))
+# OCR desabilitado por padrão no Render (512 MB RAM) — ative com OCR_HABILITADO=true se necessário
+_ocr_default = "false" if _is_render else "true"
+OCR_HABILITADO = os.getenv("OCR_HABILITADO", _ocr_default).lower() not in ("0", "false", "no", "off")
 try:
     OCR_MIN_CHAR = int(os.getenv("OCR_MIN_CHAR", "120"))
 except ValueError:
@@ -239,9 +326,9 @@ try:
 except ValueError:
     OCR_MAX_PAGINAS = 20
 try:
-    OCR_DPI = int(os.getenv("OCR_DPI", "220"))
+    OCR_DPI = int(os.getenv("OCR_DPI", "150"))
 except ValueError:
-    OCR_DPI = 220
+    OCR_DPI = 150
 try:
     OCR_MAX_FILE_BYTES = int(os.getenv("OCR_MAX_FILE_BYTES", "819200"))  # 800 KB
 except ValueError:
@@ -250,11 +337,10 @@ try:
     MAX_PAGINAS_GRANDES = int(os.getenv("MAX_PAGINAS_GRANDES", "15"))
 except ValueError:
     MAX_PAGINAS_GRANDES = 15
-APP_VERSION = os.getenv("APP_VERSION", "dev")
-APP_CHANNEL = os.getenv("APP_CHANNEL", "local")
+APP_VERSION = os.getenv("APP_VERSION", "1.0")
 APP_COMMIT = os.getenv("APP_COMMIT") or os.getenv("RENDER_GIT_COMMIT") or "local"
 APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT") or ""
-APP_VERSION_LABEL = f"{APP_VERSION} · {APP_CHANNEL}"
+APP_VERSION_LABEL = f"{APP_VERSION} · {'render' if _is_render else 'local'}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
 
 _OCR_ENGINE = None
@@ -274,6 +360,8 @@ _stats = {
     "por_provedor": {},
     "hoje": datetime.date.today().isoformat(),
     "analises_hoje": 0,
+    "ia_disponivel": True,   # False quando qualquer provedor Gemini retorna 429
+    "ia_quota_reset": None,  # ISO timestamp de quando a quota foi esgotada
 }
 
 # custo em USD por 1M tokens (input, output)
@@ -314,7 +402,12 @@ _FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=[
+        _FRONTEND_URL,
+        "http://localhost:3000",
+        "https://prumosaas.com.br",
+        "https://www.prumosaas.com.br",
+    ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1047,6 +1140,9 @@ class AnalisarRequest(BaseModel):
 
 class AnalisarResponse(BaseModel):
     ficha: str
+    id: Optional[str] = None
+    persistido: Optional[bool] = None
+    aviso: Optional[str] = None
 
 
 def _obter_ocr_engine():
@@ -1200,6 +1296,7 @@ def _extrair_texto_pdf(conteudo: bytes) -> str:
                 pdf_ocr.close()
             except Exception:
                 pass
+        gc.collect()
 
 
 def _texto_de_odt(conteudo: bytes) -> str:
@@ -1241,6 +1338,26 @@ def _texto_de_docx(conteudo: bytes) -> str:
     return "\n".join(partes).strip()
 
 
+def _texto_de_doc(conteudo: bytes) -> str:
+    """Extrai texto de .doc (Word binário OLE) via heurística UTF-16 LE + fallback ASCII."""
+    # .doc armazena texto em UTF-16 LE intercalado com bytes de controle
+    try:
+        texto = conteudo.decode("utf-16-le", errors="ignore")
+        linhas = []
+        for linha in texto.replace("\r", "\n").split("\n"):
+            limpa = "".join(c for c in linha if c.isprintable() or c == "\t")
+            if len(limpa.strip()) > 5:
+                linhas.append(limpa.strip())
+        resultado = "\n".join(linhas)
+        if len(resultado) > 200:
+            return resultado
+    except Exception:
+        pass
+    # Fallback: extrai runs de ASCII imprimível
+    chunks = re.findall(rb"[ -~\n\r\t]{15,}", conteudo)
+    return "\n".join(c.decode("ascii", errors="ignore").strip() for c in chunks if c.strip())
+
+
 def extrair_texto(nome: str, conteudo: bytes) -> str:
     nome_lower = nome.lower()
     if nome_lower.endswith(".pdf"):
@@ -1251,6 +1368,8 @@ def extrair_texto(nome: str, conteudo: bytes) -> str:
             return texto_xml
         doc = docx.Document(io.BytesIO(conteudo))
         return "\n".join(p.text for p in doc.paragraphs)
+    if nome_lower.endswith(".doc"):
+        return _texto_de_doc(conteudo)
     if nome_lower.endswith((".xlsx", ".xls")):
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True)
         linhas = []
@@ -1273,6 +1392,8 @@ def extrair_texto_com_tipo(nome: str, conteudo: bytes) -> tuple[str, str]:
         return "pdf", extrair_texto(nome, conteudo)
     if nome_lower.endswith(".docx"):
         return "docx", extrair_texto(nome, conteudo)
+    if nome_lower.endswith(".doc"):
+        return "doc", extrair_texto(nome, conteudo)
     if nome_lower.endswith((".xlsx", ".xls")):
         return "planilha", extrair_texto(nome, conteudo)
     if nome_lower.endswith(".odt"):
@@ -1503,6 +1624,172 @@ def _usa_supabase_api() -> bool:
     return bool(_SUPABASE_URL and _SUPABASE_KEY)
 
 
+# ──────────────────────────────────────────────
+# Demo pública — helpers de rate limiting
+# ──────────────────────────────────────────────
+
+DEMO_ADMIN_TOKEN = os.getenv("DEMO_ADMIN_TOKEN", "")
+_DEMO_LIMITE_LIVRE = 3   # análises sem exigir lead
+_DEMO_LIMITE_TOTAL = 4   # total incluindo bônus
+
+
+def _demo_get_ip(request) -> str:
+    """Extrai IP real do visitante (Render injeta X-Forwarded-For)."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host or "unknown"
+
+
+def _demo_calcular_estado(estado: dict, lead_autorizado: bool = False) -> dict:
+    """
+    Dada uma linha de demo_acessos (ou dict vazio), retorna o estado de permissão.
+    Retorna: {permitido, precisa_lead, bloqueado, usos_restantes}
+    """
+    usos = estado.get("usos", 0)
+    bonus = estado.get("bonus_liberado", False)
+
+    if usos < _DEMO_LIMITE_LIVRE:
+        return {"permitido": True, "precisa_lead": False, "bloqueado": False,
+                "usos_restantes": _DEMO_LIMITE_LIVRE - usos}
+
+    if usos >= _DEMO_LIMITE_LIVRE and not bonus:
+        if lead_autorizado:
+            return {"permitido": True, "precisa_lead": False, "bloqueado": False,
+                    "usos_restantes": 0}
+        return {"permitido": False, "precisa_lead": True, "bloqueado": False,
+                "usos_restantes": 0}
+
+    # usos >= 4 ou bonus já usado
+    return {"permitido": False, "precisa_lead": False, "bloqueado": True,
+            "usos_restantes": 0}
+
+
+def _demo_buscar_estado(chave: str) -> dict:
+    """Busca registro em demo_acessos. Retorna {} se não existe."""
+    if _usa_supabase_api():
+        try:
+            resultado = _supabase_request(
+                f"/rest/v1/demo_acessos?id=eq.{chave}&select=*",
+                method="GET",
+            )
+            return resultado[0] if resultado else {}
+        except Exception:
+            logger.warning("demo_buscar_estado (supabase) falhou para %s", chave)
+            return {}
+    if _DATABASE_URL:
+        try:
+            conn = _db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id,tipo,usos,ultimo_ip,tentativa_burla,lead_nome,lead_contato,"
+                "bonus_liberado,primeiro_acesso,ultimo_acesso "
+                "FROM demo_acessos WHERE id=%s",
+                (chave,),
+            )
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if not row:
+                return {}
+            cols = ["id","tipo","usos","ultimo_ip","tentativa_burla","lead_nome",
+                    "lead_contato","bonus_liberado","primeiro_acesso","ultimo_acesso"]
+            return dict(zip(cols, row))
+        except Exception:
+            logger.warning("demo_buscar_estado (pg) falhou para %s", chave)
+    return {}
+
+
+def _demo_upsert_estado(chave: str, tipo: str, ip: str, incrementar: bool = True,
+                        burla: bool = False, lead_nome: str = None,
+                        lead_contato: str = None, bonus_liberado: bool = False):
+    """Cria ou atualiza registro em demo_acessos."""
+    agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if _usa_supabase_api():
+        try:
+            payload: dict = {"id": chave, "tipo": tipo, "ultimo_ip": ip, "ultimo_acesso": agora}
+            if incrementar:
+                estado = _demo_buscar_estado(chave)
+                payload["usos"] = estado.get("usos", 0) + 1
+                if not estado:
+                    payload["primeiro_acesso"] = agora
+            if burla:
+                payload["tentativa_burla"] = True
+            if lead_nome:
+                payload["lead_nome"] = lead_nome
+            if lead_contato:
+                payload["lead_contato"] = lead_contato
+            if bonus_liberado:
+                payload["bonus_liberado"] = True
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            _supabase_request(
+                "/rest/v1/demo_acessos",
+                method="POST",
+                body=body,
+                extra_headers={"Prefer": "resolution=merge-duplicates"},
+            )
+        except Exception:
+            logger.warning("demo_upsert_estado (supabase) falhou para %s", chave)
+        return
+    if _DATABASE_URL:
+        try:
+            conn = _db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO demo_acessos (id,tipo,ultimo_ip,ultimo_acesso,primeiro_acesso)"
+                " VALUES (%s,%s,%s,%s,%s)"
+                " ON CONFLICT (id) DO UPDATE SET ultimo_ip=%s, ultimo_acesso=%s",
+                (chave, tipo, ip, agora, agora, ip, agora),
+            )
+            if incrementar:
+                cur.execute("UPDATE demo_acessos SET usos = usos + 1 WHERE id=%s", (chave,))
+            if burla:
+                cur.execute("UPDATE demo_acessos SET tentativa_burla=true WHERE id=%s", (chave,))
+            if lead_nome:
+                cur.execute("UPDATE demo_acessos SET lead_nome=%s WHERE id=%s", (lead_nome, chave))
+            if lead_contato:
+                cur.execute("UPDATE demo_acessos SET lead_contato=%s WHERE id=%s", (lead_contato, chave))
+            if bonus_liberado:
+                cur.execute("UPDATE demo_acessos SET bonus_liberado=true WHERE id=%s", (chave,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception:
+            logger.warning("demo_upsert_estado (pg) falhou para %s", chave)
+
+
+def _demo_verificar_e_registrar(ip: str, uid: str) -> dict:
+    """
+    Verifica limite para IP e UUID. Retorna estado mais restritivo.
+    Detecta troca de IP com mesmo UUID (burla).
+    """
+    estado_ip = _demo_buscar_estado(f"ip:{ip}")
+    estado_uid = _demo_buscar_estado(f"uid:{uid}")
+
+    # Detectar burla: mesmo UID, IP diferente do último registrado
+    burla = False
+    if estado_uid and estado_uid.get("ultimo_ip") and estado_uid["ultimo_ip"] != ip:
+        burla = True
+        logger.warning("Demo: possível burla detectada uid=%s ip_atual=%s ip_anterior=%s",
+                       uid, ip, estado_uid["ultimo_ip"])
+        _demo_upsert_estado(f"uid:{uid}", "uid", ip, incrementar=False, burla=True)
+
+    calc_ip = _demo_calcular_estado(estado_ip)
+    calc_uid = _demo_calcular_estado(estado_uid)
+
+    # Usa o estado mais restritivo
+    if calc_ip["bloqueado"] or calc_uid["bloqueado"]:
+        return {"permitido": False, "precisa_lead": False, "bloqueado": True,
+                "usos_restantes": 0, "burla": burla}
+    if calc_ip["precisa_lead"] or calc_uid["precisa_lead"]:
+        return {"permitido": False, "precisa_lead": True, "bloqueado": False,
+                "usos_restantes": 0, "burla": burla}
+
+    usos_restantes = min(calc_ip["usos_restantes"], calc_uid["usos_restantes"])
+    return {"permitido": True, "precisa_lead": False, "bloqueado": False,
+            "usos_restantes": usos_restantes, "burla": burla}
+
+
 def _supabase_headers(content_type: Optional[str] = "application/json", extra: Optional[dict] = None) -> dict:
     headers = {
         "apikey": _SUPABASE_KEY,
@@ -1677,7 +1964,59 @@ def _migrar_se_necessario():
 
 _migrar_se_necessario()
 
-def _salvar_historico():
+
+def _auto_migrar_logs():
+    """Cria a tabela logs automaticamente no startup via psycopg2 ou Supabase REST."""
+    _DDL = """
+        CREATE TABLE IF NOT EXISTS public.logs (
+            id        bigserial primary key,
+            criado_em timestamptz not null default now(),
+            nivel     text        not null,
+            mensagem  text        not null,
+            request_id text
+        );
+        CREATE INDEX IF NOT EXISTS logs_criado_em_idx ON public.logs (criado_em DESC);
+    """
+    if _DATABASE_URL:
+        try:
+            with _db_conn() as conn:
+                with conn.cursor() as cur:
+                    for stmt in _DDL.strip().split(";"):
+                        stmt = stmt.strip()
+                        if stmt:
+                            cur.execute(stmt)
+                conn.commit()
+            logger.info("Tabela logs verificada/criada.", extra={"request_id": "-"})
+        except Exception:
+            logger.exception("Não foi possível criar tabela logs via psycopg2.", extra={"request_id": "-"})
+
+
+_auto_migrar_logs()
+
+
+def _carregar_logs_supabase():
+    """Carrega logs recentes do Supabase para o buffer em memória no boot."""
+    global _error_buffer
+    if not _usa_supabase_api():
+        return
+    try:
+        data = _supabase_request(
+            "/rest/v1/logs?select=criado_em,nivel,request_id,mensagem&order=criado_em.desc&limit=500",
+            method="GET",
+        )
+        if isinstance(data, list):
+            _error_buffer = [
+                f"[{r.get('criado_em', '')[:19]}] [{r.get('nivel', '')}] [{r.get('request_id', '-')}] {r.get('mensagem', '')}"
+                for r in reversed(data)
+            ]
+    except Exception:
+        pass
+
+
+_carregar_logs_supabase()
+
+def _salvar_historico() -> bool:
+    """Saves history; returns True if at least one backend succeeded."""
     if _usa_supabase_api():
         try:
             for item in _historico:
@@ -1688,7 +2027,7 @@ def _salvar_historico():
                     body=payload,
                     extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
                 )
-            return
+            return True
         except Exception:
             logger.exception("Erro ao salvar historico via Supabase API", extra={"request_id": "-"})
     if _DATABASE_URL:
@@ -1703,29 +2042,31 @@ def _salvar_historico():
                             ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados
                         """, (item.get("id"), json.dumps(item_db, ensure_ascii=False)))
                 conn.commit()
-            return
-        except Exception as e:
+            return True
+        except Exception:
             logger.exception("Erro ao salvar historico", extra={"request_id": "-"})
 
     try:
         HISTORICO_FILE.write_text(
             json.dumps(_historico, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        return True
     except Exception:
         pass
+    return False
 
 _SEGMENTOS = [
-    ("SaÃºde",                  ["saÃºde", "saude", "mÃ©dic", "medic", "hospital", "medicament", "ubs", "enfermagem", "cirÃºrgic", "farmÃ¡c", "farmac", "ambulatorial"]),
-    ("EducaÃ§Ã£o",               ["escola", "educaÃ§Ã£o", "educacao", "pedagÃ³g", "pedagogic", "didÃ¡tic", "ensino", "aluno", "professor", "material escolar", "creche"]),
-    ("Obras e Infraestrutura", ["obras", "construÃ§Ã£o", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "elÃ©tric", "eletric", "hidrÃ¡ulic", "hidraulic", "saneamento"]),
-    ("AlimentaÃ§Ã£o",            ["aliment", "merenda", "refeiÃ§Ã£o", "refeicao", "gÃªneros alimentÃ­c", "generos aliment", "nutri", "cozinha", "marmita"]),
-    ("Tecnologia e TI",        ["software", "hardware", "computador", "informÃ¡tica", "informatica", "sistema", "licenÃ§a", "servidor", " ti ", "tecnologia da informaÃ§Ã£o", "impressora"]),
-    ("Transporte",             ["veÃ­culo", "veiculo", "frota", "combustÃ­vel", "combustivel", "Ã´nibus", "onibus", "manutenÃ§Ã£o veicular", "locaÃ§Ã£o de veÃ­culo", "locacao de veiculo"]),
-    ("Viagens e Passagens",    ["passagem aÃ©rea", "passagem aerea", "passagem Ã¡rea", "bilhete aÃ©reo", "bilhete aereo", "aÃ©reo", "aereo", "aÃ©rea", "aerea", "aviaÃ§Ã£o", "aviacao", "companhia aÃ©rea", "companhia aerea", "passagem", "hospedagem", "diÃ¡ria", "diaria", "hotel", "viagem"]),
-    ("Eventos e CapacitaÃ§Ã£o",  ["evento", "congresso", "capacitaÃ§Ã£o", "capacitacao", "treinamento", "curso", "palestra", "cerimÃ´nia", "cerimonia"]),
-    ("Limpeza e ConservaÃ§Ã£o",  ["limpeza", "higien", "conservaÃ§Ã£o predial", "conservacao predial", "jardinagem", "desinfeÃ§Ã£o", "desinfecao", "asseio", "zeladoria"]),
-    ("MobiliÃ¡rio e EscritÃ³rio",["mobiliÃ¡rio", "mobiliario", "mobÃ­lia", "mobilia", "escritÃ³rio", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritÃ³rio", "material de escritorio"]),
-    ("SeguranÃ§a",              ["seguranÃ§a", "seguranca", "vigilÃ¢ncia", "vigilancia", "monitoramento", "cÃ¢mera", "camera", "cctv", "alarme", "portaria"]),
+    ("Saúde",                    ["saude", "medic", "hospital", "medicament", "ubs", "enfermagem", "farmac", "ambulatorial"]),
+    ("Educação",                 ["escola", "educacao", "pedagogic", "ensino", "aluno", "professor", "material escolar", "creche"]),
+    ("Obras e Infraestrutura",   ["obras", "construcao", "reforma", "paviment", "infraestrutura", "engenharia", "eletric", "hidraulic", "saneamento"]),
+    ("Alimentação",              ["aliment", "merenda", "refeicao", "generos aliment", "nutri", "cozinha", "marmita"]),
+    ("Tecnologia e TI",          ["software", "hardware", "computador", "informatica", "sistema", "licenca", "servidor", " ti ", "tecnologia da informacao", "impressora"]),
+    ("Transporte",               ["veiculo", "frota", "combustivel", "onibus", "manutencao veicular", "locacao de veiculo"]),
+    ("Viagens e Passagens",      ["passagem aerea", "bilhete aereo", "aereo", "aerea", "aviacao", "companhia aerea", "passagem", "hospedagem", "diaria", "hotel", "viagem"]),
+    ("Eventos e Capacitação",    ["evento", "congresso", "capacitacao", "treinamento", "curso", "palestra", "cerimonia"]),
+    ("Limpeza e Conservação",    ["limpeza", "higien", "conservacao predial", "jardinagem", "desinfecao", "asseio", "zeladoria"]),
+    ("Mobiliário e Escritório",  ["mobiliario", "mobilia", "escritorio", "papel", "caneta", "grampe", "cadeira", "mesa", "material de escritorio"]),
+    ("Segurança",                ["seguranca", "vigilancia", "monitoramento", "camera", "cctv", "alarme", "portaria"]),
 ]
 
 def detectar_segmento(texto: str) -> str:
@@ -1741,6 +2082,50 @@ def _extrair_orgao_ficha(ficha: str) -> str:
     if m:
         return m.group(1).strip()
     return "Não informado"
+
+
+_ABREV_MODALIDADE = [
+    ("pregão eletrônico", "PE"), ("pregao eletronico", "PE"),
+    ("pregão presencial", "PP"), ("pregao presencial", "PP"),
+    ("dispensa eletrônica", "DE"), ("dispensa eletronica", "DE"),
+    ("dispensa de licitação", "DL"), ("dispensa de licitacao", "DL"),
+    ("concorrência eletrônica", "CE"), ("concorrencia eletronica", "CE"),
+    ("concorrência", "CC"), ("concorrencia", "CC"),
+    ("tomada de preços", "TP"), ("tomada de precos", "TP"),
+    ("inexigibilidade", "INX"),
+    ("chamamento público", "CP"), ("chamamento publico", "CP"),
+    ("credenciamento", "CRD"),
+    ("leilão", "LEI"), ("leilao", "LEI"),
+]
+
+def _abreviar_numero(numero: str) -> str:
+    n = numero.strip()
+    norm = unicodedata.normalize("NFKD", n.lower()).encode("ascii", "ignore").decode()
+    for termo, sigla in _ABREV_MODALIDADE:
+        t_norm = unicodedata.normalize("NFKD", termo).encode("ascii", "ignore").decode()
+        if norm.startswith(t_norm):
+            resto = n[len(termo):].strip().lstrip("–—-– ").strip()
+            return f"{sigla} {resto}" if resto else sigla
+    return n[:50]
+
+
+def _gerar_nome_edital(ficha: str) -> str:
+    numero = extrair_campo(ficha, "Nº / Processo")
+    orgao = _extrair_orgao_ficha(ficha)
+    # remove sufixo de estado "/RO", "/SP", etc.
+    orgao_curto = re.sub(r"\s*/[A-Z]{2}$", "", orgao.strip())[:50].strip()
+
+    num_ok = numero not in ("", "Não identificado", "Não informado")
+    org_ok = orgao_curto not in ("", "Não identificado", "Não informado")
+
+    if num_ok and org_ok:
+        return f"{_abreviar_numero(numero)} — {orgao_curto}"
+    if org_ok:
+        return orgao_curto
+    if num_ok:
+        return _abreviar_numero(numero)
+    objeto = extrair_objeto(ficha)
+    return objeto[:60].strip() if objeto else "Edital sem identificação"
 
 def extrair_campo(ficha: str, campo: str) -> str:
     # padrÃ£o markdown: | **Campo** | valor |
@@ -1799,6 +2184,24 @@ def _reclassificar_historico():
         novo = detectar_segmento(r.get("ficha", r.get("objeto", "")))
         if r.get("segmento") != novo:
             r["segmento"] = novo
+            mudou = True
+        ficha = r.get("ficha", "")
+        if ficha:
+            novo_orgao = _extrair_orgao_ficha(ficha)
+            if r.get("orgao") != novo_orgao:
+                r["orgao"] = novo_orgao
+                mudou = True
+            novo_score = extrair_score(ficha)
+            if r.get("score") != novo_score:
+                r["score"] = novo_score
+                mudou = True
+            novo_nome = _gerar_nome_edital(ficha)
+            if r.get("nome") != novo_nome:
+                r["nome"] = novo_nome
+                mudou = True
+        if "tamanho_total_bytes" not in r:
+            total = sum((a.get("tamanho_bytes") or 0) for a in (r.get("arquivos") or []))
+            r["tamanho_total_bytes"] = total
             mudou = True
     if mudou:
         _salvar_historico()
@@ -1934,25 +2337,29 @@ def _ler_ultimas_linhas(arquivo: Path, limite: int = 100) -> list[str]:
         return []
 
 
-def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto"):
+def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto") -> dict:
     analise_id = uuid.uuid4().hex[:10]
     anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
     registro = {
-        "id":        analise_id,
-        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "orgao":     _extrair_orgao_ficha(ficha),
-        "valor":     extrair_campo(ficha, "Valor Estimado Total"),
-        "objeto":    extrair_objeto(ficha),
-        "segmento":  detectar_segmento(ficha),
-        "score":     extrair_score(ficha),
-        "ficha":     ficha,
-        "arquivos":  anexos,
-        "fonte":     fonte,
+        "id":                 analise_id,
+        "timestamp":          datetime.datetime.now().isoformat(timespec="seconds"),
+        "nome":               _gerar_nome_edital(ficha),
+        "orgao":              _extrair_orgao_ficha(ficha),
+        "valor":              extrair_campo(ficha, "Valor Estimado Total"),
+        "objeto":             extrair_objeto(ficha),
+        "segmento":           detectar_segmento(ficha),
+        "score":              extrair_score(ficha),
+        "ficha":              ficha,
+        "arquivos":           anexos,
+        "fonte":              fonte,
+        "tamanho_total_bytes": sum(len(c) for _, c in (arquivos_raw or [])),
     }
     _historico.insert(0, registro)
     if len(_historico) > 500:
         _historico.pop()
-    _salvar_historico()
+    persistido = _salvar_historico()
+    aviso = None if persistido else "Análise gerada mas não foi possível salvar no histórico. Verifique a conexão com o banco."
+    return {"id": analise_id, "score": registro["score"], "persistido": persistido, "aviso": aviso}
 
 
 MAX_CHARS = 400_000
@@ -1972,6 +2379,81 @@ PROVEDORES_GRANDE = [
     ("gemini", "gemini-2.5-flash",        400_000),
     (_groq,    "llama-3.3-70b-versatile",  32_000),
 ]
+
+
+async def _gemini_texto_livre(prompt: str, modelo: str = "gemini-2.5-flash-lite") -> str:
+    """Chama Gemini com prompt livre e retorna texto bruto."""
+    if not _gemini_api_key:
+        raise HTTPException(503, "GEMINI_API_KEY nao configurada.")
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": _gemini_api_key},
+        method="POST",
+    )
+    def _do():
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read().decode("utf-8")
+    try:
+        raw = await asyncio.to_thread(_do)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        if e.code == 429:
+            _stats["ia_disponivel"] = False
+            _stats["ia_quota_reset"] = datetime.datetime.now().isoformat(timespec="seconds")
+        raise HTTPException(e.code, f"Gemini: {body or str(e)}")
+    except urllib.error.URLError as e:
+        raise HTTPException(500, f"Gemini conexão: {e.reason}")
+    data = json.loads(raw)
+    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
+_SEGMENTOS_DEFAULT = [
+    "Segurança", "Limpeza e Conservação", "Alimentação", "Saúde",
+    "Educação", "Obras e Infraestrutura", "Tecnologia e TI", "Transporte",
+    "Viagens e Passagens", "Eventos e Capacitação", "Mobiliário e Escritório", "Outros",
+]
+
+_MODELO_SEGMENTACAO = "gemini-1.5-flash-8b"  # 1500 req/dia free tier (vs 20 do flash-lite)
+
+async def _segmentar_lote_gemini(lote: list[tuple[str, str]]) -> dict[str, str]:
+    """Recebe lista de (id, objeto), retorna dict {id: segmento}."""
+    itens_txt = "\n\n".join(
+        f"ID: {id_}\nObjeto: {obj[:400]}" for id_, obj in lote
+    )
+    segs = ", ".join(_SEGMENTOS_DEFAULT[:-1])
+    prompt = (
+        f"Classifique cada licitação abaixo em um segmento.\n"
+        f"Use um dos segmentos sugeridos ou crie um nome novo (máx. 4 palavras, português).\n"
+        f"Segmentos sugeridos: {segs}.\n\n"
+        f"Responda APENAS em JSON válido (sem markdown), formato:\n"
+        f'[{{"id":"...","segmento":"..."}}]\n\n'
+        f"Licitações:\n{itens_txt}"
+    )
+    for tentativa in range(3):
+        try:
+            raw = await _gemini_texto_livre(prompt, modelo=_MODELO_SEGMENTACAO)
+            m = re.search(r"\[[\s\S]+\]", raw)
+            if not m:
+                return {}
+            dados = json.loads(m.group(0))
+            return {item["id"]: item["segmento"] for item in dados if "id" in item and "segmento" in item}
+        except HTTPException as e:
+            if e.status_code == 429 and tentativa < 2:
+                await asyncio.sleep(30)
+                continue
+            logger.warning("Erro ao segmentar lote: %s", e, extra={"request_id": "-"})
+            return {}
+        except Exception as e:
+            logger.warning("Erro ao segmentar lote: %s", e, extra={"request_id": "-"})
+            return {}
+    return {}
 
 
 async def _chamar_gemini_http(texto: str, num_docs: int, modelo: str) -> str:
@@ -2566,18 +3048,13 @@ async def importar_texto(http_request: Request, request: AnalisarRequest):
 @app.post("/api/reclassificar")
 async def api_reclassificar():
     antes = {r["id"]: (r.get("segmento"), r.get("orgao"), r.get("score")) for r in _historico}
-    _reclassificar_historico()
-    # re-extrai orgao e score de todos os registros que têm ficha
     for r in _historico:
         ficha = r.get("ficha", "")
-        if not ficha:
-            continue
-        orgao = _extrair_orgao_ficha(ficha)
-        score = extrair_score(ficha)
-        if not r.get("orgao") or r.get("orgao") in ("Não informado", "Não informado", "NÃ£o informado"):
-            r["orgao"] = orgao
-        if not r.get("score"):
-            r["score"] = score
+        texto = ficha or r.get("objeto", "")
+        r["segmento"] = detectar_segmento(texto)
+        if ficha:
+            r["orgao"] = _extrair_orgao_ficha(ficha)
+            r["score"] = extrair_score(ficha)
     _salvar_historico()
     atualizados = sum(
         1 for r in _historico
@@ -2597,6 +3074,7 @@ async def get_ficha_historico(id: str):
             return {
                 "id":        r.get("id"),
                 "timestamp": r.get("timestamp"),
+                "nome":      r.get("nome"),
                 "orgao":     r.get("orgao"),
                 "objeto":    r.get("objeto"),
                 "valor":     r.get("valor"),
@@ -2607,6 +3085,66 @@ async def get_ficha_historico(id: str):
                 "fonte":     r.get("fonte"),
             }
     raise HTTPException(404, "Análise não encontrada.")
+
+
+class _RenomearBody(BaseModel):
+    nome: str
+
+@app.patch("/historico/{id}/nome")
+async def renomear_analise(id: str, body: _RenomearBody):
+    novo_nome = body.nome.strip()[:120]
+    if not novo_nome:
+        raise HTTPException(400, "Nome não pode ser vazio.")
+    for r in _historico:
+        if r["id"] == id:
+            r["nome"] = novo_nome
+            _salvar_historico()
+            return {"ok": True, "nome": novo_nome}
+    raise HTTPException(404, "Análise não encontrada.")
+
+
+class _SegmentoBody(BaseModel):
+    segmento: str
+
+@app.patch("/historico/{id}/segmento")
+async def atualizar_segmento(id: str, body: _SegmentoBody):
+    seg = body.segmento.strip()[:80]
+    if not seg:
+        raise HTTPException(400, "Segmento não pode ser vazio.")
+    for r in _historico:
+        if r["id"] == id:
+            r["segmento"] = seg
+            _salvar_historico()
+            return {"ok": True, "segmento": seg}
+    raise HTTPException(404, "Análise não encontrada.")
+
+
+@app.post("/api/resegmentar-ia")
+async def resegmentar_ia():
+    if not _gemini_api_key:
+        raise HTTPException(503, "GEMINI_API_KEY nao configurada.")
+    if not _historico:
+        return {"atualizados": 0, "total": 0}
+
+    lote_size = 8
+    atualizados = 0
+    total = len(_historico)
+
+    for i in range(0, total, lote_size):
+        lote = [(r["id"], r.get("objeto") or r.get("ficha", "")[:400])
+                for r in _historico[i:i + lote_size]]
+        resultado = await _segmentar_lote_gemini(lote)
+        for r in _historico[i:i + lote_size]:
+            novo = resultado.get(r["id"])
+            if novo and novo != r.get("segmento"):
+                r["segmento"] = novo
+                atualizados += 1
+        if i + lote_size < total:
+            await asyncio.sleep(1.5)  # evita rate limit
+
+    if atualizados:
+        _salvar_historico()
+    return {"atualizados": atualizados, "total": total}
 
 
 @app.get("/historico/{id}/arquivos/{arquivo_id}")
@@ -2653,31 +3191,74 @@ async def baixar_arquivo_historico(id: str, arquivo_id: str):
     raise HTTPException(404, "Arquivo nÃ£o encontrado.")
 
 
+_db_ok_cache: tuple[bool, float] | None = None
+_DB_OK_TTL = 60.0
+
 def _check_db_ok() -> bool:
+    global _db_ok_cache
+    now = time.monotonic()
+    if _db_ok_cache is not None and now - _db_ok_cache[1] < _DB_OK_TTL:
+        return _db_ok_cache[0]
     try:
         if _usa_supabase_api():
             _supabase_request("/rest/v1/historico?select=id&limit=1", method="GET")
-            return True
-        if _DATABASE_URL:
+            result = True
+        elif _DATABASE_URL:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
-            return True
-        return len(_historico) > 0
+            result = True
+        else:
+            result = len(_historico) > 0
     except Exception:
-        return False
+        result = False
+    _db_ok_cache = (result, now)
+    return result
+
+@app.get("/health")
+async def health():
+    ia_ok = bool(_gemini_api_key or _openai_api_key or _groq_api_key)
+    return {
+        "api": "ok",
+        "db": "ok" if _check_db_ok() else "error",
+        "ia": "configured" if ia_ok else "missing",
+        "version": APP_VERSION_LABEL,
+        "commit": APP_COMMIT_LABEL,
+    }
 
 @app.get("/stats")
 async def get_stats():
     scores = [r.get("score", 0) for r in _historico if r.get("score")]
     score_medio = round(sum(scores) / len(scores)) if scores else 0
+
+    dist = {"alta": 0, "media": 0, "baixa": 0}
+    for s in scores:
+        if s >= 75:   dist["alta"]  += 1
+        elif s >= 40: dist["media"] += 1
+        else:         dist["baixa"] += 1
+
+    from collections import Counter
+    seg_counter = Counter(
+        r.get("segmento", "Outros")
+        for r in _historico
+        if r.get("segmento") and r["segmento"] not in ("", "Outros")
+    )
+    segmentos_top = dict(seg_counter.most_common(5))
+
+    segs_custom = sorted({r.get("segmento") for r in _historico if r.get("segmento")})
+    segmentos_lista = sorted(set(_SEGMENTOS_DEFAULT) | set(segs_custom))
+
     return {
         **_stats,
         "historico_n": len(_historico),
         "score_medio": score_medio,
+        "score_distribuicao": dist,
+        "segmentos_top": segmentos_top,
+        "segmentos_lista": segmentos_lista,
         "versao": APP_VERSION_LABEL,
         "commit": APP_COMMIT_LABEL,
         "limite_diario": LIMITE_DIARIO,
+        "limite_diario_atingido": _stats["analises_hoje"] >= LIMITE_DIARIO,
         "db_ok": _check_db_ok(),
     }
 
@@ -2690,9 +3271,14 @@ async def storage_check():
 @app.get("/api/logs/recent")
 async def recent_logs(limit: int = 100):
     limit = max(1, min(500, limit))
+    file_log = _ler_ultimas_linhas(LOG_FILE, limit)
+    file_errors = _ler_ultimas_linhas(ERROR_LOG_FILE, limit)
+    # Merge buffer (Supabase/persistente) com logs do arquivo (sessão atual)
+    buffer_errors = _error_buffer[-limit:]
+    merged_errors = buffer_errors if buffer_errors else file_errors
     return {
-        "log": _ler_ultimas_linhas(LOG_FILE, limit),
-        "errors": _ler_ultimas_linhas(ERROR_LOG_FILE, limit),
+        "log": file_log,
+        "errors": merged_errors,
     }
 
 
@@ -2756,16 +3342,29 @@ async def redirect_logs():
     return response
 
 
-@app.post("/analisar/arquivo", response_model=AnalisarResponse)
+# Job queue para análises longas — sobrevive a qualquer timeout de proxy
+_jobs: dict[str, dict] = {}
+_JOB_TTL = 3600.0  # descarta jobs com mais de 1h
+
+
+def _limpar_jobs_expirados():
+    agora = time.monotonic()
+    expirados = [k for k, v in _jobs.items() if agora - v.get("_ts", 0) > _JOB_TTL]
+    for k in expirados:
+        del _jobs[k]
+
+
+@app.post("/analisar/arquivo")
 async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(...), modo: str = Form("auto")):
     if not arquivos:
         raise HTTPException(400, "Nenhum arquivo enviado.")
-    _audit("analisar_arquivo_start", request.state.request_id, arquivos=len(arquivos))
 
     hoje = datetime.date.today().isoformat()
     if _stats["hoje"] != hoje:
         _stats["hoje"] = hoje
         _stats["analises_hoje"] = 0
+        _stats["ia_disponivel"] = True   # reseta quota à meia-noite
+        _stats["ia_quota_reset"] = None
 
     if _stats["analises_hoje"] >= LIMITE_DIARIO:
         raise HTTPException(429, f"Limite diário de {LIMITE_DIARIO} análises atingido. Tente novamente amanhã.")
@@ -2779,43 +3378,537 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             raise HTTPException(400, f"Erro ao ler '{arq.filename}': {e}")
         arquivos_raw.append((arq.filename, conteudo))
 
-    try:
-        texto_completo, meta_arquivos = montar_texto_caso_classificado_raw(arquivos_raw)
-    except Exception as e:
-        _audit("analisar_arquivo_process_error", request.state.request_id, erro=str(e))
-        raise HTTPException(400, f"Erro ao processar arquivos enviados: {e}")
+    job_id = uuid.uuid4().hex[:16]
+    request_id = request.state.request_id
+    num_arquivos = len(arquivos)
+    _jobs[job_id] = {"status": "pending", "_ts": time.monotonic()}
+    _limpar_jobs_expirados()
+    _audit("analisar_arquivo_start", request_id, arquivos=num_arquivos, job_id=job_id)
 
-    if len(texto_completo) > MAX_CHARS:
-        cota = MAX_CHARS // max(1, len(meta_arquivos))
-        partes = []
-        for nome, conteudo in arquivos_raw:
-            try:
-                _, texto = extrair_texto_com_tipo(nome, conteudo)
-            except Exception as e:
-                raise HTTPException(400, f"Erro ao ler '{nome}': {e}")
-            texto = texto or ""
-            if len(texto) <= cota:
-                trecho = texto
-            else:
-                inicio = int(cota * 0.60)
-                fim = cota - inicio
-                trecho = texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
-            partes.append(f"=== {nome} ===\n{trecho}")
-        texto_completo = "\n\n".join(partes)
-    ficha = await analisar_com_fallback(texto_completo, len(arquivos), modo=modo)
-    _stats["analises_hoje"] += 1
-    registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
-    _audit("analisar_arquivo_done", request.state.request_id, arquivos=len(arquivos), chars=len(texto_completo))
-    return AnalisarResponse(ficha=ficha)
+    def _prog(msg: str):
+        _jobs[job_id]["progresso"] = msg
+
+    async def _processar():
+        loop = asyncio.get_event_loop()
+        try:
+            label = f"{num_arquivos} arquivo{'s' if num_arquivos > 1 else ''}"
+            _prog(f"Lendo e extraindo texto de {label}…")
+            texto_completo, meta_arquivos = await loop.run_in_executor(
+                None, montar_texto_caso_classificado_raw, arquivos_raw
+            )
+            if len(texto_completo) > MAX_CHARS:
+                _prog("Texto muito longo — truncando para análise…")
+                def _truncar():
+                    cota = MAX_CHARS // max(1, len(meta_arquivos))
+                    partes = []
+                    for nome, conteudo in arquivos_raw:
+                        _, texto = extrair_texto_com_tipo(nome, conteudo)
+                        texto = texto or ""
+                        inicio = int(cota * 0.60)
+                        fim = cota - inicio
+                        trecho = texto if len(texto) <= cota else texto[:inicio] + "\n\n[...]\n\n" + texto[-fim:]
+                        partes.append(f"=== {nome} ===\n{trecho}")
+                    return "\n\n".join(partes), meta_arquivos
+                texto_completo, meta_arquivos = await loop.run_in_executor(None, _truncar)
+
+            chars_k = len(texto_completo) // 1000
+            _prog(f"Analisando {chars_k} mil caracteres com IA… (pode levar alguns minutos)")
+            ficha = await analisar_com_fallback(texto_completo, num_arquivos, modo=modo)
+            _prog("Salvando resultado…")
+            _stats["analises_hoje"] += 1
+            meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
+            _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))
+            _jobs[job_id] = {"status": "done", "ficha": ficha, **meta, "_ts": time.monotonic()}
+            # notificação fire-and-forget
+            nome_arquivo = arquivos_raw[0][0] if arquivos_raw else "edital"
+            send_analysis_complete(nome_arquivo, int(meta.get("score", 0)), meta["id"])
+        except Exception as e:
+            detail = getattr(e, "detail", str(e))
+            logger.error("Job %s falhou: %s", job_id, detail, extra={"request_id": request_id})
+            _jobs[job_id] = {"status": "error", "error": detail, "_ts": time.monotonic()}
+
+    asyncio.create_task(_processar())
+    return {"job_id": job_id, "status": "pending"}
+
+
+@app.get("/analisar/job/{job_id}")
+async def get_job(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job não encontrado ou expirado.")
+    return {k: v for k, v in job.items() if not k.startswith("_")}
 
 
 @app.post("/analisar", response_model=AnalisarResponse)
 async def analisar(http_request: Request, request: AnalisarRequest):
     _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
-    registrar_analise(ficha)
+    meta = registrar_analise(ficha)
+    send_analysis_complete("texto", int(meta.get("score", 0)), meta["id"])
     _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
-    return AnalisarResponse(ficha=ficha)
+    return AnalisarResponse(ficha=ficha, **meta)
+
+
+def _demo_page_html(usos_restantes: int, bloqueado: bool, precisa_lead: bool) -> str:
+    estado_json = json.dumps({
+        "usos_restantes": usos_restantes,
+        "bloqueado": bloqueado,
+        "precisa_lead": precisa_lead,
+    })
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LicitaPRO — Demo gratuita</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:#1e293b;min-height:100vh}}
+    .header{{background:#fff;border-bottom:1px solid #e2e8f0;padding:16px 24px;display:flex;align-items:center;gap:12px}}
+    .logo{{font-weight:700;font-size:18px;color:#1e293b}}
+    .badge-demo{{background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px}}
+    .main{{max-width:1100px;margin:0 auto;padding:32px 24px}}
+    .hero{{margin-bottom:28px}}
+    .hero h1{{font-size:24px;font-weight:700;margin-bottom:6px}}
+    .hero p{{color:#64748b;font-size:14px}}
+    .badge-usos{{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;margin-top:10px}}
+    .badge-verde{{background:#dcfce7;color:#15803d}}
+    .badge-amarelo{{background:#fef9c3;color:#854d0e}}
+    .badge-vermelho{{background:#fee2e2;color:#b91c1c}}
+    .grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+    @media(max-width:700px){{.grid{{grid-template-columns:1fr}}}}
+    .panel{{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px}}
+    .panel h2{{font-size:14px;font-weight:600;color:#64748b;margin-bottom:16px;text-transform:uppercase;letter-spacing:.04em}}
+    textarea{{width:100%;height:200px;border:1px solid #cbd5e1;border-radius:8px;padding:12px;font-size:13px;resize:vertical;font-family:inherit;color:#1e293b}}
+    textarea:focus{{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}}
+    .upload-label{{display:block;margin-top:10px;font-size:12px;color:#64748b}}
+    input[type=file]{{margin-top:4px;font-size:12px;width:100%}}
+    .btn{{display:block;width:100%;margin-top:14px;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;text-align:center}}
+    .btn:hover{{background:#1d4ed8}}
+    .btn:disabled{{background:#94a3b8;cursor:not-allowed}}
+    .lead-form{{display:none;flex-direction:column;gap:10px;margin-top:14px}}
+    .lead-form label{{font-size:13px;color:#475569;font-weight:500}}
+    .lead-form input{{border:1px solid #cbd5e1;border-radius:6px;padding:9px 12px;font-size:13px;width:100%}}
+    .lead-form input:focus{{outline:none;border-color:#3b82f6}}
+    .result-placeholder{{color:#94a3b8;font-size:13px;text-align:center;padding:60px 20px}}
+    .result-content{{display:none}}
+    .ficha{{font-size:13px;line-height:1.7;color:#1e293b}}
+    .ficha h2{{font-size:15px;font-weight:700;margin:16px 0 6px;color:#1e293b}}
+    .ficha table{{width:100%;border-collapse:collapse;margin:8px 0}}
+    .ficha td,.ficha th{{border:1px solid #e2e8f0;padding:6px 10px;font-size:12px;text-align:left}}
+    .ficha th{{background:#f1f5f9;font-weight:600}}
+    .score-badge{{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:700;font-size:14px;margin-bottom:12px}}
+    .score-alto{{background:#dcfce7;color:#15803d}}
+    .score-medio{{background:#fef9c3;color:#854d0e}}
+    .score-baixo{{background:#fee2e2;color:#b91c1c}}
+    .spinner{{display:none;text-align:center;padding:40px;color:#64748b;font-size:13px}}
+    .bloqueado-msg{{background:#f1f5f9;border-radius:8px;padding:20px;text-align:center;color:#475569;font-size:14px;margin-top:14px}}
+  </style>
+</head>
+<body>
+<div class="header">
+  <span class="logo">LicitaPRO</span>
+  <span class="badge-demo">Demo gratuita</span>
+</div>
+<div class="main">
+  <div class="hero">
+    <h1>Análise inteligente de editais públicos</h1>
+    <p>Cole o texto ou envie um PDF — a IA extrai e pontua o edital em segundos.</p>
+    <span id="badge-usos" class="badge-usos badge-verde">⬤ carregando...</span>
+  </div>
+  <div class="grid">
+    <div class="panel">
+      <h2>Seu edital</h2>
+      <div id="area-input">
+        <textarea id="txt-edital" placeholder="Cole aqui o texto do edital..."></textarea>
+        <label class="upload-label">ou envie um arquivo PDF / DOCX
+          <input type="file" id="input-arquivo" accept=".pdf,.docx,.doc,.txt">
+        </label>
+        <button class="btn" id="btn-analisar" onclick="analisar()">⚡ Analisar agora</button>
+      </div>
+      <div id="area-lead" class="lead-form">
+        <p style="font-size:13px;color:#475569;margin-bottom:4px">
+          Você usou suas <strong>3 análises gratuitas</strong>.<br>
+          Deixe seu contato para liberar mais <strong>1 análise bônus</strong>.
+        </p>
+        <label>Nome<input type="text" id="lead-nome" placeholder="Seu nome"></label>
+        <label>WhatsApp ou e-mail<input type="text" id="lead-contato" placeholder="(11) 9 9999-9999 ou email@exemplo.com"></label>
+        <button class="btn" onclick="enviarLead()">Liberar análise bônus</button>
+      </div>
+      <div id="area-bloqueado" class="bloqueado-msg" style="display:none">
+        Você usou todas as suas análises gratuitas.<br>
+        <strong>Em breve o LicitaPRO estará disponível para contratação.</strong>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Resultado da análise</h2>
+      <div id="result-placeholder" class="result-placeholder">O resultado aparece aqui após a análise.</div>
+      <div id="spinner" class="spinner">🔍 Analisando com IA…</div>
+      <div id="result-content" class="result-content">
+        <span id="score-badge" class="score-badge"></span>
+        <div id="ficha" class="ficha"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  var _estado = {estado_json};
+  var _textoAtual = "";
+
+  function _atualizarBadge(usos) {{
+    var el = document.getElementById('badge-usos');
+    if (_estado.bloqueado) {{
+      el.className = 'badge-usos badge-vermelho';
+      el.textContent = '⬤ Demo encerrada';
+    }} else if (_estado.precisa_lead) {{
+      el.className = 'badge-usos badge-vermelho';
+      el.textContent = '⬤ Limite atingido — deixe seu contato';
+    }} else {{
+      var n = usos !== undefined ? usos : _estado.usos_restantes;
+      el.className = n > 1 ? 'badge-usos badge-verde' : 'badge-usos badge-amarelo';
+      el.textContent = '⬤ ' + n + ' de 3 análises gratuitas restantes';
+    }}
+  }}
+
+  function _mostrarEstado() {{
+    var areaInput = document.getElementById('area-input');
+    var areaLead = document.getElementById('area-lead');
+    var areaBloq = document.getElementById('area-bloqueado');
+    areaInput.style.display = _estado.bloqueado || _estado.precisa_lead ? 'none' : '';
+    areaLead.style.display = _estado.precisa_lead ? 'flex' : 'none';
+    areaBloq.style.display = _estado.bloqueado ? '' : 'none';
+    _atualizarBadge();
+  }}
+
+  function _marcarFicha(md) {{
+    return md
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/[*][*](.+?)[*][*]/g, '<strong>$1</strong>')
+      .replace(/\\n/g, '<br>')
+      .split('\\n').join('<br>');
+  }}
+
+  function _mostrarResultado(dados) {{
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('result-placeholder').style.display = 'none';
+    var rc = document.getElementById('result-content');
+    rc.style.display = '';
+    var score = dados.score || 0;
+    var badge = document.getElementById('score-badge');
+    badge.textContent = 'Score: ' + score + '/100';
+    badge.className = 'score-badge ' + (score >= 70 ? 'score-alto' : score >= 40 ? 'score-medio' : 'score-baixo');
+    document.getElementById('ficha').innerHTML = _marcarFicha(dados.ficha || '');
+    _estado.usos_restantes = dados.usos_restantes;
+    _estado.precisa_lead = dados.precisa_lead || false;
+    _estado.bloqueado = dados.bloqueado || false;
+    _mostrarEstado();
+  }}
+
+  async function analisar() {{
+    var txt = document.getElementById('txt-edital').value.trim();
+    var arq = document.getElementById('input-arquivo').files[0];
+    if (!txt && !arq) {{ alert('Cole o texto ou selecione um arquivo.'); return; }}
+    _textoAtual = txt;
+    document.getElementById('btn-analisar').disabled = true;
+    document.getElementById('result-placeholder').style.display = 'none';
+    document.getElementById('result-content').style.display = 'none';
+    document.getElementById('spinner').style.display = '';
+
+    var fd = new FormData();
+    if (arq) fd.append('arquivo', arq);
+    else fd.append('texto', txt);
+
+    try {{
+      var r = await fetch('/demo/analisar', {{method:'POST', body: fd}});
+      var dados = await r.json();
+      if (!r.ok) {{
+        document.getElementById('spinner').style.display = 'none';
+        if (dados.precisa_lead) {{ _estado.precisa_lead = true; _mostrarEstado(); }}
+        else if (dados.bloqueado) {{ _estado.bloqueado = true; _mostrarEstado(); }}
+        else alert(dados.detail || 'Erro ao analisar.');
+        return;
+      }}
+      _mostrarResultado(dados);
+    }} catch(e) {{
+      document.getElementById('spinner').style.display = 'none';
+      alert('Erro de conexão. Tente novamente.');
+    }} finally {{
+      document.getElementById('btn-analisar').disabled = false;
+    }}
+  }}
+
+  async function enviarLead() {{
+    var nome = document.getElementById('lead-nome').value.trim();
+    var contato = document.getElementById('lead-contato').value.trim();
+    if (!nome || !contato) {{ alert('Preencha nome e contato.'); return; }}
+    var txt = _textoAtual;
+    var arq = document.getElementById('input-arquivo').files[0];
+    if (!txt && !arq) {{ alert('Volte e cole o texto ou selecione um arquivo antes de enviar o lead.'); return; }}
+
+    document.getElementById('area-lead').style.display = 'none';
+    document.getElementById('spinner').style.display = '';
+
+    var fd = new FormData();
+    fd.append('nome', nome);
+    fd.append('contato', contato);
+    if (arq) fd.append('arquivo', arq);
+    else fd.append('texto', txt);
+
+    try {{
+      var r = await fetch('/demo/lead', {{method:'POST', body: fd}});
+      var dados = await r.json();
+      if (!r.ok) {{
+        document.getElementById('spinner').style.display = 'none';
+        alert(dados.detail || 'Erro ao processar.');
+        return;
+      }}
+      _mostrarResultado(dados);
+    }} catch(e) {{
+      document.getElementById('spinner').style.display = 'none';
+      alert('Erro de conexão. Tente novamente.');
+    }}
+  }}
+
+  _mostrarEstado();
+</script>
+</body>
+</html>"""
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def demo_page(request: Request):
+    ip = _demo_get_ip(request)
+    uid = request.cookies.get("licitapro_demo_id") or ""
+
+    if uid:
+        estado = _demo_verificar_e_registrar(ip, uid)
+    else:
+        estado = {"permitido": True, "precisa_lead": False, "bloqueado": False,
+                  "usos_restantes": _DEMO_LIMITE_LIVRE}
+
+    html = _demo_page_html(
+        usos_restantes=estado["usos_restantes"],
+        bloqueado=estado["bloqueado"],
+        precisa_lead=estado["precisa_lead"],
+    )
+    response = HTMLResponse(html)
+    if not uid:
+        novo_uid = uuid.uuid4().hex
+        response.set_cookie("licitapro_demo_id", novo_uid, max_age=365 * 24 * 3600,
+                            httponly=False, samesite="lax")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/demo/analisar")
+async def demo_analisar(
+    request: Request,
+    texto: str = Form(None),
+    arquivo: UploadFile = File(None),
+    visitor_uid: str = Form(None),
+):
+    ip = _demo_get_ip(request)
+    uid = request.cookies.get("licitapro_demo_id") or visitor_uid or f"anon-{ip}"
+
+    estado = _demo_verificar_e_registrar(ip, uid)
+    if not estado["permitido"]:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "limite_atingido",
+                "precisa_lead": estado["precisa_lead"],
+                "bloqueado": estado["bloqueado"],
+            }
+        )
+
+    # Extrai texto
+    if arquivo and arquivo.filename:
+        conteudo = await arquivo.read()
+        texto_edital = await asyncio.get_running_loop().run_in_executor(
+            None, extrair_texto, arquivo.filename, conteudo
+        )
+    elif texto:
+        texto_edital = texto
+    else:
+        raise HTTPException(400, "Envie texto ou arquivo.")
+
+    # Limita custo da demo
+    texto_edital = texto_edital[:15_000]
+
+    ficha = await analisar_com_fallback(texto_edital, num_docs=1, modo="auto")
+
+    # Incrementa contador para IP e UID
+    _demo_upsert_estado(f"ip:{ip}", "ip", ip, incrementar=True)
+    if not uid.startswith("anon-"):
+        _demo_upsert_estado(f"uid:{uid}", "uid", ip, incrementar=True)
+
+    # Calcula estado atualizado para retornar ao front
+    novo_estado_ip = _demo_buscar_estado(f"ip:{ip}")
+    novo_calc = _demo_calcular_estado(novo_estado_ip)
+
+    # Extrai score da ficha
+    try:
+        campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
+        score = calcular_score_viabilidade(campos)[0]
+    except Exception:
+        score = 0
+
+    return JSONResponse({
+        "ficha": ficha,
+        "score": score,
+        "usos_restantes": novo_calc["usos_restantes"],
+        "precisa_lead": novo_calc["precisa_lead"],
+        "bloqueado": novo_calc["bloqueado"],
+    })
+
+
+@app.post("/demo/lead")
+async def demo_lead(
+    request: Request,
+    nome: str = Form(...),
+    contato: str = Form(...),
+    texto: str = Form(None),
+    arquivo: UploadFile = File(None),
+    visitor_uid: str = Form(None),
+):
+    if not nome.strip() or not contato.strip():
+        raise HTTPException(400, "Nome e contato são obrigatórios.")
+
+    ip = _demo_get_ip(request)
+    uid = request.cookies.get("licitapro_demo_id") or visitor_uid or f"anon-{ip}"
+
+    # Verifica que realmente está no estado "precisa_lead"
+    estado_ip = _demo_buscar_estado(f"ip:{ip}")
+    estado_uid = _demo_buscar_estado(f"uid:{uid}")
+    calc_ip = _demo_calcular_estado(estado_ip)
+    calc_uid = _demo_calcular_estado(estado_uid)
+
+    if calc_ip["bloqueado"] or calc_uid["bloqueado"]:
+        raise HTTPException(429, "Limite definitivo atingido.")
+
+    if not (calc_ip["precisa_lead"] or calc_uid["precisa_lead"]):
+        raise HTTPException(400, "Nenhuma análise bônus pendente.")
+
+    # Extrai texto
+    if arquivo and arquivo.filename:
+        conteudo = await arquivo.read()
+        texto_edital = await asyncio.get_running_loop().run_in_executor(
+            None, extrair_texto, arquivo.filename, conteudo
+        )
+    elif texto:
+        texto_edital = texto
+    else:
+        raise HTTPException(400, "Envie texto ou arquivo.")
+
+    texto_edital = texto_edital[:15_000]
+
+    ficha = await analisar_com_fallback(texto_edital, num_docs=1, modo="auto")
+
+    # Salva lead + marca bônus usado
+    _demo_upsert_estado(f"ip:{ip}", "ip", ip, incrementar=True,
+                        lead_nome=nome.strip(), lead_contato=contato.strip(),
+                        bonus_liberado=True)
+    if not uid.startswith("anon-"):
+        _demo_upsert_estado(f"uid:{uid}", "uid", ip, incrementar=True,
+                            lead_nome=nome.strip(), lead_contato=contato.strip(),
+                            bonus_liberado=True)
+
+    logger.info("Demo lead captado: ip=%s contato=%s", ip, contato.strip())
+
+    try:
+        campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
+        score = calcular_score_viabilidade(campos)[0]
+    except Exception:
+        score = 0
+
+    return JSONResponse({
+        "ficha": ficha,
+        "score": score,
+        "usos_restantes": 0,
+        "precisa_lead": False,
+        "bloqueado": True,
+    })
+
+
+@app.get("/admin/demo", response_class=HTMLResponse)
+async def admin_demo(request: Request, token: str = ""):
+    if not DEMO_ADMIN_TOKEN or not hmac.compare_digest(token, DEMO_ADMIN_TOKEN):
+        raise HTTPException(401, "Token inválido.")
+
+    registros = []
+    if _usa_supabase_api():
+        try:
+            registros = _supabase_request(
+                "/rest/v1/demo_acessos?select=*&order=ultimo_acesso.desc&limit=500",
+                method="GET",
+            ) or []
+        except Exception:
+            registros = []
+
+    def _linha(r):
+        burla = "⚠️ sim" if r.get("tentativa_burla") else "não"
+        bonus = "✅ sim" if r.get("bonus_liberado") else "não"
+        lead = f"{_html.escape(r.get('lead_nome') or '')} / {_html.escape(r.get('lead_contato') or '')}"
+        primeiro = _html.escape((r.get("primeiro_acesso") or "")[:16].replace("T", " "))
+        ultimo_ip = _html.escape(r.get("ultimo_ip") or "")
+        rid = _html.escape(r.get("id") or "")
+        tipo = _html.escape(r.get("tipo") or "")
+        tem_lead = "sim" if r.get("lead_nome") else "não"
+        usos = r.get("usos", 0)
+        return (
+            f'<tr data-lead="{tem_lead}" data-burla="{"sim" if r.get("tentativa_burla") else "nao"}">'
+            f"<td>{rid}</td><td>{tipo}</td><td>{usos}</td>"
+            f"<td>{primeiro}</td><td>{ultimo_ip}</td>"
+            f"<td>{lead}</td><td>{burla}</td><td>{bonus}</td></tr>"
+        )
+
+    linhas = "".join(_linha(r) for r in registros) or "<tr><td colspan='8'>Nenhum registro.</td></tr>"
+    total = len(registros)
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Admin Demo — LicitaPRO</title>
+  <style>
+    body{{font-family:-apple-system,sans-serif;background:#f8fafc;color:#1e293b;padding:24px}}
+    h1{{font-size:20px;font-weight:700;margin-bottom:16px}}
+    .filtros{{margin-bottom:12px;display:flex;gap:8px}}
+    .filtros button{{padding:6px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;font-size:13px}}
+    .filtros button.ativo{{background:#2563eb;color:#fff;border-color:#2563eb}}
+    table{{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
+    th,td{{padding:10px 12px;font-size:12px;text-align:left;border-bottom:1px solid #f1f5f9}}
+    th{{background:#f1f5f9;font-weight:600;color:#475569}}
+    tr:hover td{{background:#f8fafc}}
+    tr[data-burla="sim"] td:first-child{{color:#b91c1c;font-weight:600}}
+  </style>
+</head>
+<body>
+<h1>Admin Demo — LicitaPRO</h1>
+<p style="font-size:13px;color:#64748b;margin-bottom:16px">{total} registros</p>
+<div class="filtros">
+  <button class="ativo" onclick="filtrar('todos',this)">Todos</button>
+  <button onclick="filtrar('leads',this)">Só leads</button>
+  <button onclick="filtrar('burlas',this)">Só burlas</button>
+</div>
+<table>
+  <thead><tr><th>ID</th><th>Tipo</th><th>Usos</th><th>Primeiro acesso</th><th>Último IP</th><th>Lead</th><th>Burla</th><th>Bônus</th></tr></thead>
+  <tbody id="tbody">{linhas}</tbody>
+</table>
+<script>
+  function filtrar(modo, btn) {{
+    document.querySelectorAll('.filtros button').forEach(b => b.classList.remove('ativo'));
+    btn.classList.add('ativo');
+    document.querySelectorAll('#tbody tr').forEach(tr => {{
+      if (modo === 'todos') tr.style.display = '';
+      else if (modo === 'leads') tr.style.display = tr.dataset.lead === 'sim' ? '' : 'none';
+      else if (modo === 'burlas') tr.style.display = tr.dataset.burla === 'sim' ? '' : 'none';
+    }});
+  }}
+</script>
+</body>
+</html>""")
 
 
 if __name__ == "__main__":

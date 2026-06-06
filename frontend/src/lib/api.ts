@@ -5,26 +5,86 @@ import type {
   Modo,
   StatsResponse,
 } from './types'
+import { recordError } from './errorStore'
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init)
-  if (!res.ok) {
-    const err = await res.text().catch(() => res.statusText)
-    throw new Error(err || `HTTP ${res.status}`)
+  if (!BASE) throw new Error('NEXT_PUBLIC_API_URL não configurada — verifique as variáveis de ambiente da Vercel.')
+  const url = `${BASE}${path}`
+  const method = init?.method ?? 'GET'
+  try {
+    const res = await fetch(url, init)
+    if (!res.ok) {
+      const err = await res.text().catch(() => res.statusText)
+      const msg = err || `HTTP ${res.status}`
+      recordError(url, method, msg, res.status)
+      throw new Error(msg)
+    }
+    return res.json() as Promise<T>
+  } catch (e) {
+    if (e instanceof TypeError) recordError(url, method, e)
+    throw e
   }
-  return res.json() as Promise<T>
 }
 
 export async function analisarArquivos(
   arquivos: File[],
-  modo: Modo = 'auto'
+  modo: Modo = 'auto',
+  onProgresso?: (msg: string) => void
 ): Promise<AnalisarResponse> {
+  if (!BASE) throw new Error('NEXT_PUBLIC_API_URL não configurada — verifique as variáveis de ambiente da Vercel.')
   const form = new FormData()
   arquivos.forEach((f) => form.append('arquivos', f))
   form.append('modo', modo)
-  return request<AnalisarResponse>('/analisar/arquivo', { method: 'POST', body: form })
+
+  // POST retorna job_id imediatamente — retry até 3x se Render estiver acordando
+  const uploadUrl = `${BASE}/analisar/arquivo`
+  let res: Response | undefined
+  let lastUploadErr: unknown
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 15000))
+    try {
+      res = await fetch(uploadUrl, { method: 'POST', body: form })
+      break
+    } catch (e) {
+      lastUploadErr = e
+      recordError(uploadUrl, 'POST', e)
+    }
+  }
+  if (!res) throw lastUploadErr
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText)
+    const msg = err || `HTTP ${res.status}`
+    recordError(uploadUrl, 'POST', msg, res.status)
+    throw new Error(msg)
+  }
+  const { job_id } = await res.json() as { job_id: string }
+
+  // Polling a cada 3s até o job terminar (até 10 minutos)
+  const MAX_MS = 10 * 60 * 1000
+  const start = Date.now()
+  while (Date.now() - start < MAX_MS) {
+    await new Promise((r) => setTimeout(r, 3000))
+    const pollUrl = `${BASE}/analisar/job/${job_id}`
+    try {
+      const poll = await fetch(pollUrl)
+      if (poll.status === 404) throw new Error('Servidor reiniciado durante a análise. Tente novamente.')
+      if (!poll.ok) { recordError(pollUrl, 'GET', `HTTP ${poll.status}`, poll.status); continue }
+      const job = await poll.json() as { status: string; error?: string; progresso?: string } & AnalisarResponse
+      if (job.progresso && onProgresso) onProgresso(job.progresso)
+      if (job.status === 'done') return job
+      if (job.status === 'error') {
+        const msg = job.error ?? 'Erro na análise.'
+        recordError(pollUrl, 'GET', msg)
+        throw new Error(msg)
+      }
+    } catch (e) {
+      if (e instanceof TypeError) recordError(pollUrl, 'GET', e)
+      throw e
+    }
+  }
+  throw new Error('Análise demorou mais de 10 minutos. Tente com menos arquivos.')
 }
 
 export async function analisarTexto(
@@ -69,10 +129,27 @@ export async function reclassificar(): Promise<{ atualizados: number; total: num
   return request('/api/reclassificar', { method: 'POST' })
 }
 
+export async function resegmentarIA(): Promise<{ atualizados: number; total: number }> {
+  return request('/api/resegmentar-ia', { method: 'POST' })
+}
+
+export async function atualizarSegmento(id: string, segmento: string): Promise<{ ok: boolean; segmento: string }> {
+  return request(`/historico/${id}/segmento`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segmento }),
+  })
+}
+
 export async function getLogs(limit = 100): Promise<{ log: string[]; errors: string[] }> {
   return request(`/api/logs/recent?limit=${limit}`)
 }
 
 export function urlArquivo(analiseId: string, arquivoId: string): string {
   return `${BASE}/historico/${analiseId}/arquivos/${arquivoId}`
+}
+
+export function pingHealth(): void {
+  if (!BASE) return
+  fetch(`${BASE}/health`).catch(() => {})
 }

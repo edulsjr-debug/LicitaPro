@@ -4,7 +4,10 @@
 
 O LicitaPRO analisa editais de licitação pública com IA.
 Backend: FastAPI (Python) em `https://licitapro-dev.onrender.com` (branch dev).
-Frontend: Next.js 15 na pasta `frontend/` deste repositório.
+Frontend: Next.js 15 na pasta `frontend/` deste repositório — deployado em Vercel:
+`https://licita-humditgva-edulsjr-s-projects.vercel.app/`
+
+Variável de ambiente no Vercel: `NEXT_PUBLIC_API_URL=https://licitapro-dev.onrender.com`
 
 A estrutura de arquivos, tipos e API client já foram criados. Implemente os componentes e páginas.
 
