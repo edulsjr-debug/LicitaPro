@@ -9,6 +9,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
+import posthog as _posthog
 import queue as _queue_module
 import re
 import threading as _threading_module
@@ -342,6 +343,26 @@ APP_COMMIT = os.getenv("APP_COMMIT") or os.getenv("RENDER_GIT_COMMIT") or "local
 APP_DEPLOYED_AT = os.getenv("APP_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT") or ""
 APP_VERSION_LABEL = f"{APP_VERSION} · {'render' if _is_render else 'local'}"
 APP_COMMIT_LABEL = APP_COMMIT[:7] if APP_COMMIT else "local"
+
+# PostHog Analytics
+_POSTHOG_KEY = os.getenv("POSTHOG_KEY", "")
+_POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://app.posthog.com")
+_POSTHOG_ENV = os.getenv("NODE_ENV", "production")
+if _POSTHOG_KEY:
+    _posthog.project_api_key = _POSTHOG_KEY
+    _posthog.host = _POSTHOG_HOST
+
+def _ph_capture(distinct_id: str, event: str, properties: dict | None = None) -> None:
+    if not _POSTHOG_KEY:
+        return
+    try:
+        _posthog.capture(
+            distinct_id,
+            event,
+            {**(properties or {}), "environment": _POSTHOG_ENV},
+        )
+    except Exception:
+        pass  # analytics nunca bloqueia o fluxo principal
 
 _OCR_ENGINE = None
 
@@ -3422,6 +3443,21 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             # notificação fire-and-forget
             nome_arquivo = arquivos_raw[0][0] if arquivos_raw else "edital"
             send_analysis_complete(nome_arquivo, int(meta.get("score", 0)), meta["id"])
+            posthog_id = request.headers.get("x-posthog-id", f"anon-{job_id[:8]}")
+            ficha_dict: dict = {}
+            try:
+                import json as _json
+                ficha_dict = _json.loads(ficha) if isinstance(ficha, str) else {}
+            except Exception:
+                pass
+            usou_ia = meta.get("provedor") not in (None, "", "parser_local")
+            _ph_capture(posthog_id, "edital_uploaded", {
+                "modo": modo,
+                "num_files": num_arquivos,
+                "confianca": ficha_dict.get("confianca", 0),
+                "usou_ia": usou_ia,
+                "score": int(meta.get("score", 0)),
+            })
         except Exception as e:
             detail = getattr(e, "detail", str(e))
             logger.error("Job %s falhou: %s", job_id, detail, extra={"request_id": request_id})
