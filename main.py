@@ -402,7 +402,12 @@ _FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=[
+        _FRONTEND_URL,
+        "http://localhost:3000",
+        "https://prumosaas.com.br",
+        "https://www.prumosaas.com.br",
+    ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
@@ -3664,9 +3669,10 @@ async def demo_analisar(
     request: Request,
     texto: str = Form(None),
     arquivo: UploadFile = File(None),
+    visitor_uid: str = Form(None),
 ):
     ip = _demo_get_ip(request)
-    uid = request.cookies.get("licitapro_demo_id") or f"anon-{ip}"
+    uid = request.cookies.get("licitapro_demo_id") or visitor_uid or f"anon-{ip}"
 
     estado = _demo_verificar_e_registrar(ip, uid)
     if not estado["permitido"]:
@@ -3727,12 +3733,13 @@ async def demo_lead(
     contato: str = Form(...),
     texto: str = Form(None),
     arquivo: UploadFile = File(None),
+    visitor_uid: str = Form(None),
 ):
     if not nome.strip() or not contato.strip():
         raise HTTPException(400, "Nome e contato são obrigatórios.")
 
     ip = _demo_get_ip(request)
-    uid = request.cookies.get("licitapro_demo_id") or f"anon-{ip}"
+    uid = request.cookies.get("licitapro_demo_id") or visitor_uid or f"anon-{ip}"
 
     # Verifica que realmente está no estado "precisa_lead"
     estado_ip = _demo_buscar_estado(f"ip:{ip}")
