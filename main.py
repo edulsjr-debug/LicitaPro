@@ -9,6 +9,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
+import posthog as _posthog
 import queue as _queue_module
 import re
 import threading as _threading_module
@@ -3400,6 +3401,20 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             # notificação fire-and-forget
             nome_arquivo = arquivos_raw[0][0] if arquivos_raw else "edital"
             send_analysis_complete(nome_arquivo, int(meta.get("score", 0)), meta["id"])
+            posthog_id = request.headers.get("x-posthog-id", f"anon-{job_id[:8]}")
+            ficha_dict: dict = {}
+            try:
+                ficha_dict = json.loads(ficha) if isinstance(ficha, str) else {}
+            except Exception:
+                pass
+            usou_ia = meta.get("provedor") not in (None, "", "parser_local")
+            _ph_capture(posthog_id, "edital_uploaded", {
+                "modo": modo,
+                "num_files": num_arquivos,
+                "confianca": ficha_dict.get("confianca", 0),
+                "usou_ia": usou_ia,
+                "score": int(meta.get("score", 0)),
+            })
         except Exception as e:
             detail = getattr(e, "detail", str(e))
             logger.error("Job %s falhou: %s", job_id, detail, extra={"request_id": request_id})
