@@ -1679,7 +1679,7 @@ def _demo_buscar_estado(chave: str) -> dict:
             return {}
     if _DATABASE_URL:
         try:
-            conn = _obter_conn()
+            conn = _db_conn()
             cur = conn.cursor()
             cur.execute(
                 "SELECT id,tipo,usos,ultimo_ip,tentativa_burla,lead_nome,lead_contato,"
@@ -1733,7 +1733,7 @@ def _demo_upsert_estado(chave: str, tipo: str, ip: str, incrementar: bool = True
         return
     if _DATABASE_URL:
         try:
-            conn = _obter_conn()
+            conn = _db_conn()
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO demo_acessos (id,tipo,ultimo_ip,ultimo_acesso,primeiro_acesso)"
