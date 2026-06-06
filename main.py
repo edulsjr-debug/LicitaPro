@@ -3406,6 +3406,468 @@ async def analisar(http_request: Request, request: AnalisarRequest):
     return AnalisarResponse(ficha=ficha, **meta)
 
 
+def _demo_page_html(usos_restantes: int, bloqueado: bool, precisa_lead: bool) -> str:
+    estado_json = json.dumps({
+        "usos_restantes": usos_restantes,
+        "bloqueado": bloqueado,
+        "precisa_lead": precisa_lead,
+    })
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LicitaPRO — Demo gratuita</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:#1e293b;min-height:100vh}}
+    .header{{background:#fff;border-bottom:1px solid #e2e8f0;padding:16px 24px;display:flex;align-items:center;gap:12px}}
+    .logo{{font-weight:700;font-size:18px;color:#1e293b}}
+    .badge-demo{{background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px}}
+    .main{{max-width:1100px;margin:0 auto;padding:32px 24px}}
+    .hero{{margin-bottom:28px}}
+    .hero h1{{font-size:24px;font-weight:700;margin-bottom:6px}}
+    .hero p{{color:#64748b;font-size:14px}}
+    .badge-usos{{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;margin-top:10px}}
+    .badge-verde{{background:#dcfce7;color:#15803d}}
+    .badge-amarelo{{background:#fef9c3;color:#854d0e}}
+    .badge-vermelho{{background:#fee2e2;color:#b91c1c}}
+    .grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+    @media(max-width:700px){{.grid{{grid-template-columns:1fr}}}}
+    .panel{{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px}}
+    .panel h2{{font-size:14px;font-weight:600;color:#64748b;margin-bottom:16px;text-transform:uppercase;letter-spacing:.04em}}
+    textarea{{width:100%;height:200px;border:1px solid #cbd5e1;border-radius:8px;padding:12px;font-size:13px;resize:vertical;font-family:inherit;color:#1e293b}}
+    textarea:focus{{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}}
+    .upload-label{{display:block;margin-top:10px;font-size:12px;color:#64748b}}
+    input[type=file]{{margin-top:4px;font-size:12px;width:100%}}
+    .btn{{display:block;width:100%;margin-top:14px;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;text-align:center}}
+    .btn:hover{{background:#1d4ed8}}
+    .btn:disabled{{background:#94a3b8;cursor:not-allowed}}
+    .lead-form{{display:none;flex-direction:column;gap:10px;margin-top:14px}}
+    .lead-form label{{font-size:13px;color:#475569;font-weight:500}}
+    .lead-form input{{border:1px solid #cbd5e1;border-radius:6px;padding:9px 12px;font-size:13px;width:100%}}
+    .lead-form input:focus{{outline:none;border-color:#3b82f6}}
+    .result-placeholder{{color:#94a3b8;font-size:13px;text-align:center;padding:60px 20px}}
+    .result-content{{display:none}}
+    .ficha{{font-size:13px;line-height:1.7;color:#1e293b}}
+    .ficha h2{{font-size:15px;font-weight:700;margin:16px 0 6px;color:#1e293b}}
+    .ficha table{{width:100%;border-collapse:collapse;margin:8px 0}}
+    .ficha td,.ficha th{{border:1px solid #e2e8f0;padding:6px 10px;font-size:12px;text-align:left}}
+    .ficha th{{background:#f1f5f9;font-weight:600}}
+    .score-badge{{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:700;font-size:14px;margin-bottom:12px}}
+    .score-alto{{background:#dcfce7;color:#15803d}}
+    .score-medio{{background:#fef9c3;color:#854d0e}}
+    .score-baixo{{background:#fee2e2;color:#b91c1c}}
+    .spinner{{display:none;text-align:center;padding:40px;color:#64748b;font-size:13px}}
+    .bloqueado-msg{{background:#f1f5f9;border-radius:8px;padding:20px;text-align:center;color:#475569;font-size:14px;margin-top:14px}}
+  </style>
+</head>
+<body>
+<div class="header">
+  <span class="logo">LicitaPRO</span>
+  <span class="badge-demo">Demo gratuita</span>
+</div>
+<div class="main">
+  <div class="hero">
+    <h1>Análise inteligente de editais públicos</h1>
+    <p>Cole o texto ou envie um PDF — a IA extrai e pontua o edital em segundos.</p>
+    <span id="badge-usos" class="badge-usos badge-verde">⬤ carregando...</span>
+  </div>
+  <div class="grid">
+    <div class="panel">
+      <h2>Seu edital</h2>
+      <div id="area-input">
+        <textarea id="txt-edital" placeholder="Cole aqui o texto do edital..."></textarea>
+        <label class="upload-label">ou envie um arquivo PDF / DOCX
+          <input type="file" id="input-arquivo" accept=".pdf,.docx,.doc,.txt">
+        </label>
+        <button class="btn" id="btn-analisar" onclick="analisar()">⚡ Analisar agora</button>
+      </div>
+      <div id="area-lead" class="lead-form">
+        <p style="font-size:13px;color:#475569;margin-bottom:4px">
+          Você usou suas <strong>3 análises gratuitas</strong>.<br>
+          Deixe seu contato para liberar mais <strong>1 análise bônus</strong>.
+        </p>
+        <label>Nome<input type="text" id="lead-nome" placeholder="Seu nome"></label>
+        <label>WhatsApp ou e-mail<input type="text" id="lead-contato" placeholder="(11) 9 9999-9999 ou email@exemplo.com"></label>
+        <button class="btn" onclick="enviarLead()">Liberar análise bônus</button>
+      </div>
+      <div id="area-bloqueado" class="bloqueado-msg" style="display:none">
+        Você usou todas as suas análises gratuitas.<br>
+        <strong>Em breve o LicitaPRO estará disponível para contratação.</strong>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Resultado da análise</h2>
+      <div id="result-placeholder" class="result-placeholder">O resultado aparece aqui após a análise.</div>
+      <div id="spinner" class="spinner">🔍 Analisando com IA…</div>
+      <div id="result-content" class="result-content">
+        <span id="score-badge" class="score-badge"></span>
+        <div id="ficha" class="ficha"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  var _estado = {estado_json};
+  var _textoAtual = "";
+
+  function _atualizarBadge(usos) {{
+    var el = document.getElementById('badge-usos');
+    if (_estado.bloqueado) {{
+      el.className = 'badge-usos badge-vermelho';
+      el.textContent = '⬤ Demo encerrada';
+    }} else if (_estado.precisa_lead) {{
+      el.className = 'badge-usos badge-vermelho';
+      el.textContent = '⬤ Limite atingido — deixe seu contato';
+    }} else {{
+      var n = usos !== undefined ? usos : _estado.usos_restantes;
+      el.className = n > 1 ? 'badge-usos badge-verde' : 'badge-usos badge-amarelo';
+      el.textContent = '⬤ ' + n + ' de 3 análises gratuitas restantes';
+    }}
+  }}
+
+  function _mostrarEstado() {{
+    var areaInput = document.getElementById('area-input');
+    var areaLead = document.getElementById('area-lead');
+    var areaBloq = document.getElementById('area-bloqueado');
+    areaInput.style.display = _estado.bloqueado || _estado.precisa_lead ? 'none' : '';
+    areaLead.style.display = _estado.precisa_lead ? 'flex' : 'none';
+    areaBloq.style.display = _estado.bloqueado ? '' : 'none';
+    _atualizarBadge();
+  }}
+
+  function _marcarFicha(md) {{
+    return md
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/[*][*](.+?)[*][*]/g, '<strong>$1</strong>')
+      .replace(/\\n/g, '<br>')
+      .split('\\n').join('<br>');
+  }}
+
+  function _mostrarResultado(dados) {{
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('result-placeholder').style.display = 'none';
+    var rc = document.getElementById('result-content');
+    rc.style.display = '';
+    var score = dados.score || 0;
+    var badge = document.getElementById('score-badge');
+    badge.textContent = 'Score: ' + score + '/100';
+    badge.className = 'score-badge ' + (score >= 70 ? 'score-alto' : score >= 40 ? 'score-medio' : 'score-baixo');
+    document.getElementById('ficha').innerHTML = _marcarFicha(dados.ficha || '');
+    _estado.usos_restantes = dados.usos_restantes;
+    _estado.precisa_lead = dados.precisa_lead || false;
+    _estado.bloqueado = dados.bloqueado || false;
+    _mostrarEstado();
+  }}
+
+  async function analisar() {{
+    var txt = document.getElementById('txt-edital').value.trim();
+    var arq = document.getElementById('input-arquivo').files[0];
+    if (!txt && !arq) {{ alert('Cole o texto ou selecione um arquivo.'); return; }}
+    _textoAtual = txt;
+    document.getElementById('btn-analisar').disabled = true;
+    document.getElementById('result-placeholder').style.display = 'none';
+    document.getElementById('result-content').style.display = 'none';
+    document.getElementById('spinner').style.display = '';
+
+    var fd = new FormData();
+    if (arq) fd.append('arquivo', arq);
+    else fd.append('texto', txt);
+
+    try {{
+      var r = await fetch('/demo/analisar', {{method:'POST', body: fd}});
+      var dados = await r.json();
+      if (!r.ok) {{
+        document.getElementById('spinner').style.display = 'none';
+        if (dados.precisa_lead) {{ _estado.precisa_lead = true; _mostrarEstado(); }}
+        else if (dados.bloqueado) {{ _estado.bloqueado = true; _mostrarEstado(); }}
+        else alert(dados.detail || 'Erro ao analisar.');
+        return;
+      }}
+      _mostrarResultado(dados);
+    }} catch(e) {{
+      document.getElementById('spinner').style.display = 'none';
+      alert('Erro de conexão. Tente novamente.');
+    }} finally {{
+      document.getElementById('btn-analisar').disabled = false;
+    }}
+  }}
+
+  async function enviarLead() {{
+    var nome = document.getElementById('lead-nome').value.trim();
+    var contato = document.getElementById('lead-contato').value.trim();
+    if (!nome || !contato) {{ alert('Preencha nome e contato.'); return; }}
+    var txt = _textoAtual;
+    var arq = document.getElementById('input-arquivo').files[0];
+    if (!txt && !arq) {{ alert('Volte e cole o texto ou selecione um arquivo antes de enviar o lead.'); return; }}
+
+    document.getElementById('area-lead').style.display = 'none';
+    document.getElementById('spinner').style.display = '';
+
+    var fd = new FormData();
+    fd.append('nome', nome);
+    fd.append('contato', contato);
+    if (arq) fd.append('arquivo', arq);
+    else fd.append('texto', txt);
+
+    try {{
+      var r = await fetch('/demo/lead', {{method:'POST', body: fd}});
+      var dados = await r.json();
+      if (!r.ok) {{
+        document.getElementById('spinner').style.display = 'none';
+        alert(dados.detail || 'Erro ao processar.');
+        return;
+      }}
+      _mostrarResultado(dados);
+    }} catch(e) {{
+      document.getElementById('spinner').style.display = 'none';
+      alert('Erro de conexão. Tente novamente.');
+    }}
+  }}
+
+  _mostrarEstado();
+</script>
+</body>
+</html>"""
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def demo_page(request: Request):
+    ip = _demo_get_ip(request)
+    uid = request.cookies.get("licitapro_demo_id") or ""
+
+    if uid:
+        estado = _demo_verificar_e_registrar(ip, uid)
+    else:
+        estado = {"permitido": True, "precisa_lead": False, "bloqueado": False,
+                  "usos_restantes": _DEMO_LIMITE_LIVRE}
+
+    html = _demo_page_html(
+        usos_restantes=estado["usos_restantes"],
+        bloqueado=estado["bloqueado"],
+        precisa_lead=estado["precisa_lead"],
+    )
+    response = HTMLResponse(html)
+    if not uid:
+        novo_uid = uuid.uuid4().hex
+        response.set_cookie("licitapro_demo_id", novo_uid, max_age=365 * 24 * 3600,
+                            httponly=False, samesite="lax")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/demo/analisar")
+async def demo_analisar(
+    request: Request,
+    texto: str = Form(None),
+    arquivo: UploadFile = File(None),
+):
+    ip = _demo_get_ip(request)
+    uid = request.cookies.get("licitapro_demo_id") or f"anon-{ip}"
+
+    estado = _demo_verificar_e_registrar(ip, uid)
+    if not estado["permitido"]:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "limite_atingido",
+                "precisa_lead": estado["precisa_lead"],
+                "bloqueado": estado["bloqueado"],
+            }
+        )
+
+    # Extrai texto
+    if arquivo and arquivo.filename:
+        conteudo = await arquivo.read()
+        loop = asyncio.get_event_loop()
+        texto_edital = await loop.run_in_executor(
+            None, extrair_texto, arquivo.filename, conteudo
+        )
+    elif texto:
+        texto_edital = texto
+    else:
+        raise HTTPException(400, "Envie texto ou arquivo.")
+
+    # Limita custo da demo
+    texto_edital = texto_edital[:15_000]
+
+    ficha = await analisar_com_fallback(texto_edital, num_docs=1, modo="auto")
+
+    # Incrementa contador para IP e UID
+    _demo_upsert_estado(f"ip:{ip}", "ip", ip, incrementar=True)
+    if not uid.startswith("anon-"):
+        _demo_upsert_estado(f"uid:{uid}", "uid", ip, incrementar=True)
+
+    # Calcula estado atualizado para retornar ao front
+    novo_estado_ip = _demo_buscar_estado(f"ip:{ip}")
+    novo_calc = _demo_calcular_estado(novo_estado_ip)
+
+    # Extrai score da ficha
+    try:
+        campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
+        score = calcular_score_viabilidade(campos)
+    except Exception:
+        score = 0
+
+    return JSONResponse({
+        "ficha": ficha,
+        "score": score,
+        "usos_restantes": novo_calc["usos_restantes"],
+        "precisa_lead": novo_calc["precisa_lead"],
+        "bloqueado": novo_calc["bloqueado"],
+    })
+
+
+@app.post("/demo/lead")
+async def demo_lead(
+    request: Request,
+    nome: str = Form(...),
+    contato: str = Form(...),
+    texto: str = Form(None),
+    arquivo: UploadFile = File(None),
+):
+    if not nome.strip() or not contato.strip():
+        raise HTTPException(400, "Nome e contato são obrigatórios.")
+
+    ip = _demo_get_ip(request)
+    uid = request.cookies.get("licitapro_demo_id") or f"anon-{ip}"
+
+    # Verifica que realmente está no estado "precisa_lead"
+    estado_ip = _demo_buscar_estado(f"ip:{ip}")
+    estado_uid = _demo_buscar_estado(f"uid:{uid}")
+    calc_ip = _demo_calcular_estado(estado_ip)
+    calc_uid = _demo_calcular_estado(estado_uid)
+
+    if calc_ip["bloqueado"] or calc_uid["bloqueado"]:
+        raise HTTPException(429, "Limite definitivo atingido.")
+
+    if not (calc_ip["precisa_lead"] or calc_uid["precisa_lead"]):
+        raise HTTPException(400, "Nenhuma análise bônus pendente.")
+
+    # Extrai texto
+    if arquivo and arquivo.filename:
+        conteudo = await arquivo.read()
+        loop = asyncio.get_event_loop()
+        texto_edital = await loop.run_in_executor(
+            None, extrair_texto, arquivo.filename, conteudo
+        )
+    elif texto:
+        texto_edital = texto
+    else:
+        raise HTTPException(400, "Envie texto ou arquivo.")
+
+    texto_edital = texto_edital[:15_000]
+
+    ficha = await analisar_com_fallback(texto_edital, num_docs=1, modo="auto")
+
+    # Salva lead + marca bônus usado
+    _demo_upsert_estado(f"ip:{ip}", "ip", ip, incrementar=True,
+                        lead_nome=nome.strip(), lead_contato=contato.strip(),
+                        bonus_liberado=True)
+    if not uid.startswith("anon-"):
+        _demo_upsert_estado(f"uid:{uid}", "uid", ip, incrementar=True,
+                            lead_nome=nome.strip(), lead_contato=contato.strip(),
+                            bonus_liberado=True)
+
+    logger.info("Demo lead captado: ip=%s contato=%s", ip, contato.strip())
+
+    try:
+        campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
+        score = calcular_score_viabilidade(campos)
+    except Exception:
+        score = 0
+
+    return JSONResponse({
+        "ficha": ficha,
+        "score": score,
+        "usos_restantes": 0,
+        "precisa_lead": False,
+        "bloqueado": True,
+    })
+
+
+@app.get("/admin/demo", response_class=HTMLResponse)
+async def admin_demo(request: Request, token: str = ""):
+    if not DEMO_ADMIN_TOKEN or token != DEMO_ADMIN_TOKEN:
+        raise HTTPException(401, "Token inválido.")
+
+    registros = []
+    if _usa_supabase_api():
+        try:
+            registros = _supabase_request(
+                "/rest/v1/demo_acessos?select=*&order=ultimo_acesso.desc&limit=500",
+                method="GET",
+            ) or []
+        except Exception:
+            registros = []
+
+    def _linha(r):
+        burla = "⚠️ sim" if r.get("tentativa_burla") else "não"
+        bonus = "✅ sim" if r.get("bonus_liberado") else "não"
+        lead = f"{_html.escape(r.get('lead_nome') or '')} / {_html.escape(r.get('lead_contato') or '')}"
+        primeiro = (r.get("primeiro_acesso") or "")[:16].replace("T", " ")
+        ultimo_ip = _html.escape(r.get("ultimo_ip") or "")
+        rid = _html.escape(r.get("id") or "")
+        tipo = _html.escape(r.get("tipo") or "")
+        tem_lead = "sim" if r.get("lead_nome") else "não"
+        usos = r.get("usos", 0)
+        return (
+            f'<tr data-lead="{tem_lead}" data-burla="{"sim" if r.get("tentativa_burla") else "nao"}">'
+            f"<td>{rid}</td><td>{tipo}</td><td>{usos}</td>"
+            f"<td>{primeiro}</td><td>{ultimo_ip}</td>"
+            f"<td>{lead}</td><td>{burla}</td><td>{bonus}</td></tr>"
+        )
+
+    linhas = "".join(_linha(r) for r in registros) or "<tr><td colspan='8'>Nenhum registro.</td></tr>"
+    total = len(registros)
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Admin Demo — LicitaPRO</title>
+  <style>
+    body{{font-family:-apple-system,sans-serif;background:#f8fafc;color:#1e293b;padding:24px}}
+    h1{{font-size:20px;font-weight:700;margin-bottom:16px}}
+    .filtros{{margin-bottom:12px;display:flex;gap:8px}}
+    .filtros button{{padding:6px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;font-size:13px}}
+    .filtros button.ativo{{background:#2563eb;color:#fff;border-color:#2563eb}}
+    table{{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
+    th,td{{padding:10px 12px;font-size:12px;text-align:left;border-bottom:1px solid #f1f5f9}}
+    th{{background:#f1f5f9;font-weight:600;color:#475569}}
+    tr:hover td{{background:#f8fafc}}
+    tr[data-burla="sim"] td:first-child{{color:#b91c1c;font-weight:600}}
+  </style>
+</head>
+<body>
+<h1>Admin Demo — LicitaPRO</h1>
+<p style="font-size:13px;color:#64748b;margin-bottom:16px">{total} registros</p>
+<div class="filtros">
+  <button class="ativo" onclick="filtrar('todos',this)">Todos</button>
+  <button onclick="filtrar('leads',this)">Só leads</button>
+  <button onclick="filtrar('burlas',this)">Só burlas</button>
+</div>
+<table>
+  <thead><tr><th>ID</th><th>Tipo</th><th>Usos</th><th>Primeiro acesso</th><th>Último IP</th><th>Lead</th><th>Burla</th><th>Bônus</th></tr></thead>
+  <tbody id="tbody">{linhas}</tbody>
+</table>
+<script>
+  function filtrar(modo, btn) {{
+    document.querySelectorAll('.filtros button').forEach(b => b.classList.remove('ativo'));
+    btn.classList.add('ativo');
+    document.querySelectorAll('#tbody tr').forEach(tr => {{
+      if (modo === 'todos') tr.style.display = '';
+      else if (modo === 'leads') tr.style.display = tr.dataset.lead === 'sim' ? '' : 'none';
+      else if (modo === 'burlas') tr.style.display = tr.dataset.burla === 'sim' ? '' : 'none';
+    }});
+  }}
+</script>
+</body>
+</html>""")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
