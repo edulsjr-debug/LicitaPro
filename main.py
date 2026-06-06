@@ -9,7 +9,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import mimetypes
-import posthog as _posthog
 import queue as _queue_module
 import re
 import threading as _threading_module
@@ -423,12 +422,7 @@ _FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        _FRONTEND_URL,
-        "http://localhost:3000",
-        "https://prumosaas.com.br",
-        "https://www.prumosaas.com.br",
-    ],
+    allow_origins=[_FRONTEND_URL, "http://localhost:3000"],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1688,95 +1682,58 @@ def _demo_calcular_estado(estado: dict, lead_autorizado: bool = False) -> dict:
 
 def _demo_buscar_estado(chave: str) -> dict:
     """Busca registro em demo_acessos. Retorna {} se não existe."""
-    if _usa_supabase_api():
-        try:
-            resultado = _supabase_request(
-                f"/rest/v1/demo_acessos?id=eq.{chave}&select=*",
-                method="GET",
-            )
-            return resultado[0] if resultado else {}
-        except Exception:
-            logger.warning("demo_buscar_estado (supabase) falhou para %s", chave)
-            return {}
-    if _DATABASE_URL:
-        try:
-            conn = _db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT id,tipo,usos,ultimo_ip,tentativa_burla,lead_nome,lead_contato,"
-                "bonus_liberado,primeiro_acesso,ultimo_acesso "
-                "FROM demo_acessos WHERE id=%s",
-                (chave,),
-            )
-            row = cur.fetchone()
-            cur.close()
-            conn.close()
-            if not row:
-                return {}
-            cols = ["id","tipo","usos","ultimo_ip","tentativa_burla","lead_nome",
-                    "lead_contato","bonus_liberado","primeiro_acesso","ultimo_acesso"]
-            return dict(zip(cols, row))
-        except Exception:
-            logger.warning("demo_buscar_estado (pg) falhou para %s", chave)
-    return {}
+    if not _usa_supabase_api():
+        return {}
+    try:
+        resultado = _supabase_request(
+            f"/rest/v1/demo_acessos?id=eq.{chave}&select=*",
+            method="GET",
+        )
+        return resultado[0] if resultado else {}
+    except Exception:
+        logger.warning("demo_buscar_estado falhou para %s", chave)
+        return {}
 
 
 def _demo_upsert_estado(chave: str, tipo: str, ip: str, incrementar: bool = True,
                         burla: bool = False, lead_nome: str = None,
                         lead_contato: str = None, bonus_liberado: bool = False):
     """Cria ou atualiza registro em demo_acessos."""
-    agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    if _usa_supabase_api():
-        try:
-            payload: dict = {"id": chave, "tipo": tipo, "ultimo_ip": ip, "ultimo_acesso": agora}
-            if incrementar:
-                estado = _demo_buscar_estado(chave)
-                payload["usos"] = estado.get("usos", 0) + 1
-                if not estado:
-                    payload["primeiro_acesso"] = agora
-            if burla:
-                payload["tentativa_burla"] = True
-            if lead_nome:
-                payload["lead_nome"] = lead_nome
-            if lead_contato:
-                payload["lead_contato"] = lead_contato
-            if bonus_liberado:
-                payload["bonus_liberado"] = True
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            _supabase_request(
-                "/rest/v1/demo_acessos",
-                method="POST",
-                body=body,
-                extra_headers={"Prefer": "resolution=merge-duplicates"},
-            )
-        except Exception:
-            logger.warning("demo_upsert_estado (supabase) falhou para %s", chave)
+    if not _usa_supabase_api():
         return
-    if _DATABASE_URL:
-        try:
-            conn = _db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO demo_acessos (id,tipo,ultimo_ip,ultimo_acesso,primeiro_acesso)"
-                " VALUES (%s,%s,%s,%s,%s)"
-                " ON CONFLICT (id) DO UPDATE SET ultimo_ip=%s, ultimo_acesso=%s",
-                (chave, tipo, ip, agora, agora, ip, agora),
-            )
-            if incrementar:
-                cur.execute("UPDATE demo_acessos SET usos = usos + 1 WHERE id=%s", (chave,))
-            if burla:
-                cur.execute("UPDATE demo_acessos SET tentativa_burla=true WHERE id=%s", (chave,))
-            if lead_nome:
-                cur.execute("UPDATE demo_acessos SET lead_nome=%s WHERE id=%s", (lead_nome, chave))
-            if lead_contato:
-                cur.execute("UPDATE demo_acessos SET lead_contato=%s WHERE id=%s", (lead_contato, chave))
-            if bonus_liberado:
-                cur.execute("UPDATE demo_acessos SET bonus_liberado=true WHERE id=%s", (chave,))
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception:
-            logger.warning("demo_upsert_estado (pg) falhou para %s", chave)
+    try:
+        agora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        payload: dict = {
+            "id": chave,
+            "tipo": tipo,
+            "ultimo_ip": ip,
+            "ultimo_acesso": agora,
+        }
+        if incrementar:
+            # upsert com incremento via SQL não é direto na REST API —
+            # busca valor atual e incrementa
+            estado = _demo_buscar_estado(chave)
+            payload["usos"] = estado.get("usos", 0) + 1
+            if not estado:
+                payload["primeiro_acesso"] = agora
+        if burla:
+            payload["tentativa_burla"] = True
+        if lead_nome:
+            payload["lead_nome"] = lead_nome
+        if lead_contato:
+            payload["lead_contato"] = lead_contato
+        if bonus_liberado:
+            payload["bonus_liberado"] = True
+
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        _supabase_request(
+            "/rest/v1/demo_acessos",
+            method="POST",
+            body=body,
+            extra_headers={"Prefer": "resolution=merge-duplicates"},
+        )
+    except Exception:
+        logger.warning("demo_upsert_estado falhou para %s", chave)
 
 
 def _demo_verificar_e_registrar(ip: str, uid: str) -> dict:
@@ -3443,21 +3400,6 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
             # notificação fire-and-forget
             nome_arquivo = arquivos_raw[0][0] if arquivos_raw else "edital"
             send_analysis_complete(nome_arquivo, int(meta.get("score", 0)), meta["id"])
-            posthog_id = request.headers.get("x-posthog-id", f"anon-{job_id[:8]}")
-            ficha_dict: dict = {}
-            try:
-                import json as _json
-                ficha_dict = _json.loads(ficha) if isinstance(ficha, str) else {}
-            except Exception:
-                pass
-            usou_ia = meta.get("provedor") not in (None, "", "parser_local")
-            _ph_capture(posthog_id, "edital_uploaded", {
-                "modo": modo,
-                "num_files": num_arquivos,
-                "confianca": ficha_dict.get("confianca", 0),
-                "usou_ia": usou_ia,
-                "score": int(meta.get("score", 0)),
-            })
         except Exception as e:
             detail = getattr(e, "detail", str(e))
             logger.error("Job %s falhou: %s", job_id, detail, extra={"request_id": request_id})
@@ -3742,10 +3684,9 @@ async def demo_analisar(
     request: Request,
     texto: str = Form(None),
     arquivo: UploadFile = File(None),
-    visitor_uid: str = Form(None),
 ):
     ip = _demo_get_ip(request)
-    uid = request.cookies.get("licitapro_demo_id") or visitor_uid or f"anon-{ip}"
+    uid = request.cookies.get("licitapro_demo_id") or f"anon-{ip}"
 
     estado = _demo_verificar_e_registrar(ip, uid)
     if not estado["permitido"]:
@@ -3786,7 +3727,7 @@ async def demo_analisar(
     # Extrai score da ficha
     try:
         campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
-        score = calcular_score_viabilidade(campos)[0]
+        score = calcular_score_viabilidade(campos)
     except Exception:
         score = 0
 
@@ -3806,13 +3747,12 @@ async def demo_lead(
     contato: str = Form(...),
     texto: str = Form(None),
     arquivo: UploadFile = File(None),
-    visitor_uid: str = Form(None),
 ):
     if not nome.strip() or not contato.strip():
         raise HTTPException(400, "Nome e contato são obrigatórios.")
 
     ip = _demo_get_ip(request)
-    uid = request.cookies.get("licitapro_demo_id") or visitor_uid or f"anon-{ip}"
+    uid = request.cookies.get("licitapro_demo_id") or f"anon-{ip}"
 
     # Verifica que realmente está no estado "precisa_lead"
     estado_ip = _demo_buscar_estado(f"ip:{ip}")
@@ -3854,7 +3794,7 @@ async def demo_lead(
 
     try:
         campos = analisar_sem_api(texto_edital, min_confianca=0).get("campos", {})
-        score = calcular_score_viabilidade(campos)[0]
+        score = calcular_score_viabilidade(campos)
     except Exception:
         score = 0
 
