@@ -2245,6 +2245,12 @@ def _persistir_arquivos_analise(analise_id: str, arquivos_raw: list[tuple[str, b
         try:
             with _db_conn() as conn:
                 with conn.cursor() as cur:
+                    # garante a linha em historico antes do FK de historico_arquivos
+                    # (registrar_analise persiste os arquivos antes de salvar o historico)
+                    cur.execute(
+                        "INSERT INTO historico (id, dados) VALUES (%s, '{}'::jsonb) ON CONFLICT (id) DO NOTHING",
+                        (analise_id,)
+                    )
                     cur.execute("DELETE FROM historico_arquivos WHERE analise_id = %s", (analise_id,))
                     for ordem, (nome, conteudo) in enumerate(arquivos_raw):
                         extra = meta_por_nome.get(nome, {})
