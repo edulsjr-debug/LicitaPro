@@ -3013,10 +3013,11 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
                     campos_extraidos=campos_contexto,
                     faltantes=resultado.get("faltantes", []),
                 )
+                confianca_antes = resultado.get("confianca", 0)
                 resultado_enriquecido = _mesclar_resultado_ia(resultado, dados_ia)
                 logger.info(
                     "Fallback Gemini JSON: confiança %s%% → %s%%",
-                    resultado.get("confianca", 0),
+                    confianca_antes,
                     resultado_enriquecido.get("confianca", 0),
                     extra={"request_id": "-"},
                 )
