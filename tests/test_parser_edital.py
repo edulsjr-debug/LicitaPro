@@ -119,5 +119,152 @@ class ParserEditalTest(unittest.TestCase):
         self.assertNotIn("PROJETO", resultado["orgao"].upper())
 
 
+from main import _mesclar_resultado_ia
+from parser_edital import NAO_IDENTIFICADO
+
+
+class MesclarResultadoIATest(unittest.TestCase):
+
+    def _resultado_base(self):
+        """Dict mínimo que analisar_sem_api() retornaria com confiança baixa."""
+        return {
+            "numero_edital": NAO_IDENTIFICADO,
+            "orgao": "Prefeitura de São Paulo",
+            "cnpj": NAO_IDENTIFICADO,
+            "modalidade": NAO_IDENTIFICADO,
+            "objeto": "Aquisição de computadores",
+            "valor": NAO_IDENTIFICADO,
+            "data_abertura": NAO_IDENTIFICADO,
+            "prazo_envio_proposta": NAO_IDENTIFICADO,
+            "prazo_vigencia": NAO_IDENTIFICADO,
+            "criterio_julgamento": NAO_IDENTIFICADO,
+            "documentos_habilitacao": [],
+            "segmento": "Tecnologia",
+            "confianca": 30,
+            "faltantes": ["numero_edital", "cnpj", "modalidade", "valor",
+                          "data_abertura", "prazo_vigencia", "criterio_julgamento"],
+            "usar_fallback_api": True,
+            "score": 20,
+            "nivel": "BAIXA",
+            "justificativas_score": [],
+            "ficha": "## FICHA placeholder",
+        }
+
+    def test_campos_faltantes_sao_preenchidos_pela_ia(self):
+        resultado = self._resultado_base()
+        dados_ia = {
+            "numero_edital": "PE 001/2026",
+            "orgao": None,
+            "cnpj": "46.395.000/0001-39",
+            "modalidade": "Pregão Eletrônico",
+            "objeto": None,
+            "valor": "R$ 120.000,00",
+            "data_abertura": "15/07/2026 09:00",
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": "12 meses",
+            "criterio_julgamento": "Menor Preço",
+            "documentos_habilitacao": [],
+        }
+
+        resultado_final = _mesclar_resultado_ia(resultado, dados_ia)
+
+        self.assertEqual(resultado_final["numero_edital"], "PE 001/2026")
+        self.assertEqual(resultado_final["cnpj"], "46.395.000/0001-39")
+        self.assertEqual(resultado_final["valor"], "R$ 120.000,00")
+        self.assertEqual(resultado_final["data_abertura"], "15/07/2026 09:00")
+        self.assertEqual(resultado_final["prazo_vigencia"], "12 meses")
+        self.assertEqual(resultado_final["criterio_julgamento"], "Menor Preço")
+
+    def test_parser_nao_e_sobrescrito_quando_ja_identificado(self):
+        resultado = self._resultado_base()
+        dados_ia = {
+            "numero_edital": None,
+            "orgao": "NOME ERRADO QUE A IA INVENTOU",
+            "cnpj": None,
+            "modalidade": None,
+            "objeto": "Objeto errado da IA",
+            "valor": None,
+            "data_abertura": None,
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": None,
+            "criterio_julgamento": None,
+            "documentos_habilitacao": [],
+        }
+
+        resultado_final = _mesclar_resultado_ia(resultado, dados_ia)
+
+        self.assertEqual(resultado_final["orgao"], "Prefeitura de São Paulo")
+        self.assertEqual(resultado_final["objeto"], "Aquisição de computadores")
+
+    def test_documentos_habilitacao_sao_merged_sem_duplicatas(self):
+        resultado = self._resultado_base()
+        resultado["documentos_habilitacao"] = ["Certidão FGTS", "Contrato social"]
+        dados_ia = {
+            "numero_edital": None,
+            "orgao": None,
+            "cnpj": None,
+            "modalidade": None,
+            "objeto": None,
+            "valor": None,
+            "data_abertura": None,
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": None,
+            "criterio_julgamento": None,
+            "documentos_habilitacao": ["Contrato social", "Balanço patrimonial"],
+        }
+
+        resultado_final = _mesclar_resultado_ia(resultado, dados_ia)
+        docs = resultado_final["documentos_habilitacao"]
+
+        self.assertIn("Certidão FGTS", docs)
+        self.assertIn("Contrato social", docs)
+        self.assertIn("Balanço patrimonial", docs)
+        self.assertEqual(docs.count("Contrato social"), 1)
+
+    def test_confianca_e_recalculada_apos_merge(self):
+        resultado = self._resultado_base()
+        dados_ia = {
+            "numero_edital": "PE 001/2026",
+            "orgao": None,
+            "cnpj": "46.395.000/0001-39",
+            "modalidade": "Pregão Eletrônico",
+            "objeto": None,
+            "valor": "R$ 120.000,00",
+            "data_abertura": "15/07/2026 09:00",
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": "12 meses",
+            "criterio_julgamento": "Menor Preço",
+            "documentos_habilitacao": [],
+        }
+        confianca_antes = resultado["confianca"]
+
+        resultado_final = _mesclar_resultado_ia(resultado, dados_ia)
+
+        self.assertGreater(resultado_final["confianca"], confianca_antes)
+        self.assertFalse(resultado_final["usar_fallback_api"])
+
+    def test_ficha_markdown_e_regenerada(self):
+        resultado = self._resultado_base()
+        dados_ia = {
+            "numero_edital": "PE 001/2026",
+            "orgao": None,
+            "cnpj": None,
+            "modalidade": "Pregão Eletrônico",
+            "objeto": None,
+            "valor": "R$ 120.000,00",
+            "data_abertura": "15/07/2026 09:00",
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": None,
+            "criterio_julgamento": None,
+            "documentos_habilitacao": [],
+        }
+
+        resultado_final = _mesclar_resultado_ia(resultado, dados_ia)
+
+        self.assertIn("## FICHA DE LICITAÇÃO", resultado_final["ficha"])
+        self.assertIn("PE 001/2026", resultado_final["ficha"])
+        self.assertIn("R$ 120.000,00", resultado_final["ficha"])
+
+
 if __name__ == "__main__":
     unittest.main()

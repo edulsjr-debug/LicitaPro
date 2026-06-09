@@ -22,7 +22,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import openai
 import openpyxl
@@ -2829,6 +2829,46 @@ async def _enriquecer_cnpj(cnpj: str) -> dict | None:
     except Exception as e:
         logger.warning("Falha ao consultar CNPJ %s: %s", cnpj_limpo, e, extra={"request_id": "-"})
         return None
+
+
+def _mesclar_resultado_ia(
+    resultado: dict[str, Any],
+    dados_ia: dict[str, Any],
+) -> dict[str, Any]:
+    """Mescla o dict retornado pela IA no dict do parser.
+
+    Regras: nunca sobrescreve campo que o parser já identificou;
+    documentos_habilitacao é unido sem duplicatas.
+    """
+    for campo, valor_ia in dados_ia.items():
+        if campo not in resultado:
+            continue
+
+        if campo == "documentos_habilitacao":
+            lista_parser = resultado.get("documentos_habilitacao") or []
+            lista_ia = valor_ia if isinstance(valor_ia, list) else []
+            lista_final = list(lista_parser)
+            for doc in lista_ia:
+                if doc and doc not in lista_final:
+                    lista_final.append(doc)
+            resultado["documentos_habilitacao"] = lista_final
+            continue
+
+        if not _is_identificado(resultado.get(campo)) and valor_ia is not None:
+            resultado[campo] = str(valor_ia)
+
+    confianca, faltantes = calcular_confianca(resultado)
+    resultado["confianca"] = confianca
+    resultado["faltantes"] = faltantes
+    resultado["usar_fallback_api"] = False
+
+    score, nivel, justificativas = calcular_score_viabilidade(resultado)
+    resultado["score"] = score
+    resultado["nivel"] = nivel
+    resultado["justificativas_score"] = justificativas
+
+    resultado["ficha"] = gerar_ficha(resultado)
+    return resultado
 
 
 async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -> str:
