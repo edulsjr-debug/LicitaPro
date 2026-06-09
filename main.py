@@ -2961,8 +2961,9 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
             extra={"request_id": "-"},
         )
     else:
-        # modo "auto": fallback para IA se confiança baixa
-        if resultado.get("usar_fallback_api") and PARSER_FALLBACK_API:
+        # modo "auto": sempre refinar com IA se houver campos faltantes
+        faltantes = resultado.get("faltantes", [])
+        if PARSER_FALLBACK_API and faltantes:
             # 1) tenta fallback local (se habilitado) antes de gastar API externa
             if LOCAL_LLM_ENABLED:
                 try:
@@ -2990,16 +2991,17 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
                     + texto[-(PARSER_MAX_CHARS_FALLBACK - corte):]
                 )
                 logger.info(
-                    "Confiança baixa (%s%%), doc longo (%s chars) — truncado para fallback API.",
-                    resultado.get("confianca", 0),
+                    "Campos faltantes (%s), doc longo (%s chars) — truncado para fallback API.",
+                    len(faltantes),
                     len(texto),
                     extra={"request_id": "-"},
                 )
             else:
                 texto_api = texto
                 logger.info(
-                    "Confiança baixa (%s%%). Usando fallback por API.",
-                    resultado.get("confianca", 0),
+                    "Campos faltantes (%s): %s. Refinando com IA.",
+                    len(faltantes),
+                    faltantes,
                     extra={"request_id": "-"},
                 )
             # 2a) fallback estruturado: Gemini JSON + merge no dict do parser
@@ -3011,7 +3013,7 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
                 dados_ia = await _extrair_campos_faltantes_gemini(
                     texto=texto_api,
                     campos_extraidos=campos_contexto,
-                    faltantes=resultado.get("faltantes", []),
+                    faltantes=faltantes,
                 )
                 confianca_antes = resultado.get("confianca", 0)
                 resultado_enriquecido = _mesclar_resultado_ia(resultado, dados_ia)

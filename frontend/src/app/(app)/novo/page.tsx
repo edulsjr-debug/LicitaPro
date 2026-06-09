@@ -3,22 +3,15 @@
 import { DragEvent, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { analisarArquivos, getStats } from '@/lib/api'
-import type { Modo, StatsResponse } from '@/lib/types'
+import type { StatsResponse } from '@/lib/types'
 import { extrairJustificativas, extrairScore, extrairSegmento, formatarBytes } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
 import { ScoreBadge } from '@/components/ScoreBadge'
 import { SegmentoBadge } from '@/components/SegmentoBadge'
 
-const modos: { value: Modo; label: string; description: string }[] = [
-  { value: 'auto', label: 'Auto', description: 'Parser local com fallback para IA.' },
-  { value: 'parser', label: 'Codigo', description: 'Somente parser local, sem IA.' },
-  { value: 'ia', label: 'IA', description: 'Analise direta pelo modelo de IA.' },
-]
-
 export default function NovoPage() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
-  const [modo, setModo] = useState<Modo>('auto')
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [progresso, setProgresso] = useState<string | null>(null)
@@ -84,7 +77,7 @@ export default function NovoPage() {
     }
 
     try {
-      const response = await analisarArquivos(files, modo, setProgresso)
+      const response = await analisarArquivos(files, 'auto', setProgresso)
       setFicha(response.ficha)
       setAviso(response.aviso ?? null)
       setError(null)
@@ -164,7 +157,7 @@ export default function NovoPage() {
     <div>
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-normal text-gray-950">Novo edital</h1>
-        <p className="mt-1 text-sm text-gray-600">Envie PDF, DOCX, XLSX ou TXT para gerar a ficha de analise.</p>
+        <p className="mt-1 text-sm text-gray-600">Envie o edital para gerar a ficha de analise com Parser + IA.</p>
       </div>
 
       <section
@@ -191,8 +184,8 @@ export default function NovoPage() {
             event.target.value = ''
           }}
         />
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-brand-50 text-sm font-semibold text-brand-600">
-          PDF
+        <div className="mx-auto flex h-12 w-auto max-w-fit items-center justify-center gap-1 rounded-full bg-brand-50 px-3 text-[11px] font-semibold text-brand-600">
+          PDF · DOCX · XLSX · ODT · TXT
         </div>
         <h2 className="mt-4 text-base font-semibold text-gray-950">Arraste o edital ou clique para enviar</h2>
         <p className="mt-1 text-sm text-gray-600">Multiplos arquivos simultaneos</p>
@@ -229,65 +222,15 @@ export default function NovoPage() {
 
       {files.length ? (
         <section className="mt-5">
-          <div className="grid gap-3 sm:grid-cols-3">
-            {modos.map((option) => {
-              const iaIndisponivel = !statusIA.ia_disponivel
-              const limiteAtingido = statusIA.limite_diario_atingido
-
-              const bloqueado =
-                limiteAtingido ||
-                (iaIndisponivel && (option.value === 'ia' || option.value === 'auto'))
-
-              let avisoModo: string | null = null
-              if (limiteAtingido) {
-                avisoModo = `Limite diário atingido (${statusIA.analises_hoje}/${statusIA.limite_diario ?? 20})`
-              } else if (iaIndisponivel && option.value === 'ia') {
-                avisoModo = 'Quota Gemini esgotada — reseta à meia-noite'
-              } else if (iaIndisponivel && option.value === 'auto') {
-                avisoModo = 'IA indisponível — usará somente parser'
-              }
-
-              const autoSemIA = !limiteAtingido && iaIndisponivel && option.value === 'auto'
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => !bloqueado && setModo(option.value)}
-                  disabled={bloqueado && option.value !== 'auto'}
-                  className={clsx(
-                    'rounded-lg border p-4 text-left shadow-sm transition',
-                    bloqueado && option.value !== 'auto'
-                      ? 'cursor-not-allowed border-gray-100 bg-gray-50 opacity-50'
-                      : autoSemIA
-                      ? 'border-amber-300 bg-amber-50'
-                      : modo === option.value
-                      ? 'border-brand-500 bg-white ring-2 ring-brand-100'
-                      : 'border-gray-200 bg-white hover:border-gray-300'
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={clsx('text-sm font-semibold', bloqueado && option.value !== 'auto' ? 'text-gray-400' : 'text-gray-950')}>
-                      {option.label}
-                    </span>
-                    {bloqueado && option.value !== 'auto' && (
-                      <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">Indisponível</span>
-                    )}
-                    {autoSemIA && (
-                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Sem IA</span>
-                    )}
-                  </div>
-                  <span className={clsx('mt-1 block text-xs leading-5', bloqueado && option.value !== 'auto' ? 'text-gray-400' : autoSemIA ? 'text-amber-700' : 'text-gray-600')}>
-                    {avisoModo ?? option.description}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-
           {error ? (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
+            </div>
+          ) : null}
+
+          {statusIA.limite_diario_atingido ? (
+            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              Limite diário atingido ({statusIA.analises_hoje}/{statusIA.limite_diario ?? 20} análises).
             </div>
           ) : null}
 
@@ -295,7 +238,7 @@ export default function NovoPage() {
             type="button"
             onClick={analisar}
             disabled={loading || !!statusIA.limite_diario_atingido}
-            className="mt-5 flex min-h-11 w-full flex-col items-center justify-center rounded-md bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
+            className="flex min-h-11 w-full flex-col items-center justify-center rounded-md bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {loading ? (
               <>
