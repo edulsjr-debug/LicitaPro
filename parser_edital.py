@@ -374,8 +374,35 @@ def _secao_por_nome(secoes: dict[str, str], *nomes: str) -> str:
     return ""
 
 
+_PADRAO_SUMARIO = re.compile(
+    r"\b(da participa[cç][aã]o|da apresenta[cç][aã]o|do julgamento|da habilita[cç][aã]o|dos recursos|das san[cç][oõ]es|da contrata[cç][aã]o)\b",
+    re.IGNORECASE,
+)
+
+
+def _e_sumario(texto_candidato: str) -> bool:
+    """Retorna True se o texto parece ser um índice/sumário de seções do edital."""
+    hits = len(_PADRAO_SUMARIO.findall(texto_candidato))
+    return hits >= 2
+
+
 def extrair_objeto(texto: str, secoes: Optional[dict[str, str]] = None) -> str:
     secoes = secoes or identificar_secoes(texto)
+
+    # Tentar padrões explícitos tipo "1.1. O objeto ... é a contratação"
+    padroes_especificos = [
+        r"1\.1\.?\s*[Oo]\s+objeto[^\n]{0,80}?(?:é|e)\s+(?:a\s+)?(.{30,600}?)(?=\n\s*\n|\n\s*\d+\.\d+|\Z)",
+        r"[Oo]\s+objeto\s+(?:da\s+presente\s+licita[cç][aã]o\s+)?(?:é|e)\s+(?:a\s+)?(.{30,600}?)(?=\n\s*\n|\n\s*\d+\.\d+|\Z)",
+        r"(?:contrata[cç][aã]o|aquisi[cç][aã]o)\s+de\s+(.{30,600}?)(?=\n\s*\n|\n\s*\d+\.\d+|\Z)",
+    ]
+    for padrao in padroes_especificos:
+        m = re.search(padrao, texto, re.IGNORECASE | re.DOTALL)
+        if m:
+            candidato = _limpar_linha(m.group(1))[:600]
+            if _is_identificado(candidato) and not _e_sumario(candidato):
+                return candidato
+
+    # Tentar seção identificada, descartando se for sumário
     secao = _secao_por_nome(secoes, "objeto")
     if secao:
         linhas = []
@@ -392,22 +419,25 @@ def extrair_objeto(texto: str, secoes: Optional[dict[str, str]] = None) -> str:
             if sum(len(l) for l in linhas) >= 350:
                 break
         if linhas:
-            return _limpar_linha(" ".join(linhas))[:600]
+            candidato = _limpar_linha(" ".join(linhas))[:600]
+            if not _e_sumario(candidato):
+                return candidato
 
-    padroes = [
+    # Fallback genérico
+    padroes_fallback = [
         r"(?:objeto\s*[:\-]\s*)([^\n]{20,600})",
         r"(?:contratação|contratacao|aquisição|aquisicao)\s+de\s+([^\n]{20,600})",
     ]
-    for padrao in padroes:
+    for padrao in padroes_fallback:
         valor = _primeiro_grupo(padrao, texto)
-        if _is_identificado(valor):
+        if _is_identificado(valor) and not _e_sumario(valor):
             return valor[:600]
     return NAO_IDENTIFICADO
 
 
 def _valor_float(valor: str) -> float:
     texto = _normalizar(valor)
-    match = re.search(r"(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)", valor)
+    match = re.search(r"(\d{1,3}(?:\.\d{3})+(?:,\d{2})?|\d+(?:,\d{2})?)", valor)
     if not match:
         return 0.0
     numero = match.group(1).replace(".", "").replace(",", ".")
@@ -427,8 +457,8 @@ def _valor_float(valor: str) -> float:
 def extrair_valor(texto: str) -> str:
     texto_norm = _normalizar(texto)
     contexto_valor_forte = [
-        "valor estimado total", "valor total estimado", "valor global",
-        "valor estimado da contratacao", "valor da contratacao",
+        "valor total da contratacao", "valor estimado total", "valor total estimado",
+        "valor global", "valor estimado da contratacao", "valor da contratacao",
         "valor maximo estimado", "valor maximo global", "orcamento estimado",
     ]
     contexto_valor = [
@@ -496,7 +526,8 @@ def extrair_valor(texto: str) -> str:
                     num = parse_valor_numerico(m.group(1))
                     if not aceitar_candidato(janela_norm, num):
                         continue
-                    candidatos.append((score_contexto(janela_norm), num, f"R$ {m.group(1)}"))
+                    tem_sep = "." in m.group(1) or "," in m.group(1)
+                    candidatos.append((score_contexto(janela_norm), tem_sep, num, f"R$ {m.group(1)}"))
             pos = texto_norm.find(ctx, pos + 1)
 
     if not candidatos:
@@ -508,13 +539,15 @@ def extrair_valor(texto: str) -> str:
                 num = parse_valor_numerico(m.group(1))
                 if not aceitar_candidato(contexto, num):
                     continue
-                candidatos.append((score_contexto(contexto), num, f"R$ {m.group(1)}"))
+                tem_sep = "." in m.group(1) or "," in m.group(1)
+                candidatos.append((score_contexto(contexto), tem_sep, num, f"R$ {m.group(1)}"))
 
     if not candidatos:
         return NAO_IDENTIFICADO
 
-    candidatos.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return candidatos[0][2]
+    # prioridade: (score DESC, tem_separador DESC, valor DESC)
+    candidatos.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    return candidatos[0][3]
 
 def extrair_data_abertura(texto: str) -> str:
     datas: list[tuple[int, str]] = []
@@ -634,12 +667,23 @@ def extrair_prazo_vigencia(texto: str) -> str:
 
 
 def extrair_prazo_envio_proposta(texto: str) -> str:
+    _data = r"(\d{1,2}/\d{1,2}/\d{4}(?:\s*(?:às|as|ate|até)\s*\d{1,2}[:h]\d{2})?)"
     padroes = [
-        r"(?:recebimento|envio|encaminhamento)\s+(?:das\s+)?propostas[^\n]{0,120}?(\d{1,2}/\d{1,2}/\d{4}(?:\s*(?:às|as)\s*\d{1,2}[:h]\d{2})?)",
-        r"(?:propostas[^\n]{0,80}?até|ate)[^\n]{0,40}?(\d{1,2}/\d{1,2}/\d{4}(?:\s*(?:às|as)\s*\d{1,2}[:h]\d{2})?)",
+        # "recebimento/envio/encaminhamento das propostas ... dd/mm/aaaa"
+        r"(?:recebimento|envio|encaminhamento)\s+(?:das\s+)?propostas[^\n]{0,120}?" + _data,
+        # "propostas ... até dd/mm/aaaa"
+        r"propostas[^\n]{0,80}?(?:até|ate)[^\n]{0,40}?" + _data,
+        # "prazo.*proposta.*dd/mm/aaaa"
+        r"prazo[^\n]{0,80}?proposta[^\n]{0,80}?" + _data,
+        # "data.*limite.*proposta.*dd/mm/aaaa"
+        r"data[^\n]{0,60}?limite[^\n]{0,60}?proposta[^\n]{0,60}?" + _data,
+        # "data limite para envio ... dd/mm/aaaa"
+        r"data\s+limite[^\n]{0,80}?" + _data,
+        # "abertura" no mesmo bloco (fallback — quando não distingue abertura de prazo)
+        # intencional deixar fora: capturaria a mesma data que data_abertura
     ]
     for padrao in padroes:
-        valor = _primeiro_grupo(padrao, texto)
+        valor = _primeiro_grupo(padrao, texto, flags=re.IGNORECASE)
         if _is_identificado(valor):
             return valor
     return NAO_IDENTIFICADO
@@ -656,31 +700,46 @@ def extrair_documentos_habilitacao(texto: str, secoes: Optional[dict[str, str]] 
         )
         conteudo = match.group(0) if match else ""
 
-    docs: list[str] = []
+    _TERMOS_DOC = [
+        "certidao", "comprovante", "atestado", "declaracao",
+        "ato constitutivo", "contrato social", "balanco patrimonial",
+        "regularidade", "fgts", "receita federal", "falencia",
+        "inscricao estadual", "inscricao municipal", "procuracao",
+        "habilitacao juridica", "qualificacao tecnica",
+    ]
+    _NOVO_ITEM = re.compile(r"^\s*(\d+(\.\d+)*\s*[-.)]\s*|[-•]\s*)")
+
+    # Montar blocos: linhas consecutivas que não iniciam novo item são continuação
+    blocos: list[str] = []
+    bloco_atual: list[str] = []
     for linha in conteudo.splitlines():
-        limpa = _limpar_linha(re.sub(r"^\d+(\.\d+)*\s*[-.)]?\s*", "", linha))
-        normalizada = _normalizar(limpa)
-        if len(limpa) < 8:
+        limpa = _limpar_linha(linha)
+        if not limpa:
+            if bloco_atual:
+                blocos.append(" ".join(bloco_atual))
+                bloco_atual = []
             continue
-        if any(
-            termo in normalizada
-            for termo in [
-                "certidao",
-                "comprovante",
-                "atestado",
-                "declaracao",
-                "ato constitutivo",
-                "contrato social",
-                "balanco patrimonial",
-                "regularidade",
-                "fgts",
-                "receita federal",
-                "falencia",
-                "inscricao estadual",
-                "inscricao municipal",
-            ]
-        ):
-            docs.append(limpa[:180])
+        if _NOVO_ITEM.match(linha) and bloco_atual:
+            blocos.append(" ".join(bloco_atual))
+            bloco_atual = []
+        sem_num = _limpar_linha(re.sub(r"^\d+(\.\d+)*\s*[-.)]?\s*", "", limpa))
+        if sem_num:
+            bloco_atual.append(sem_num)
+    if bloco_atual:
+        blocos.append(" ".join(bloco_atual))
+
+    docs: list[str] = []
+    for bloco in blocos:
+        normalizado = _normalizar(bloco)
+        if len(bloco) < 20:
+            continue
+        if any(termo in normalizado for termo in _TERMOS_DOC):
+            # Truncar no limite de frase (ponto/;) mais próximo até 300 chars
+            if len(bloco) > 300:
+                corte = bloco.rfind(".", 0, 300)
+                corte = corte if corte > 100 else bloco.rfind(";", 0, 300)
+                bloco = bloco[: corte + 1] if corte > 100 else bloco[:300] + "..."
+            docs.append(bloco)
 
     unicos = []
     vistos = set()
@@ -818,14 +877,15 @@ def calcular_confianca(campos: dict[str, Any]) -> tuple[int, list[str]]:
     pesos = {
         "numero_edital": 12,
         "orgao": 12,
-        "cnpj": 8,
+        "cnpj": 6,
         "modalidade": 10,
         "objeto": 18,
         "valor": 12,
         "data_abertura": 12,
-        "prazo_vigencia": 6,
-        "criterio_julgamento": 6,
-        "documentos_habilitacao": 4,
+        "prazo_envio_proposta": 8,
+        "prazo_vigencia": 4,
+        "criterio_julgamento": 4,
+        "documentos_habilitacao": 2,
     }
     faltantes = []
     pontos = 0
