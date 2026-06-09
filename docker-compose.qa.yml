@@ -1,0 +1,29 @@
+services:
+  licitapro-api-qa:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: licitapro-api-qa
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/Sao_Paulo
+    networks:
+      - prumo-net
+
+  licitapro-web-qa:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: https://qa.api.licitapro.prumosaas.com.br
+    container_name: licitapro-web-qa
+    restart: unless-stopped
+    environment:
+      TZ: America/Sao_Paulo
+    networks:
+      - prumo-net
+
+networks:
+  prumo-net:
+    external: true

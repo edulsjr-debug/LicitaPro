@@ -1,0 +1,30 @@
+services:
+  licitapro-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: licitapro-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/Sao_Paulo
+    networks:
+      - prumo-net
+
+  licitapro-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: https://api.licitapro.prumosaas.com.br
+    container_name: licitapro-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/Sao_Paulo
+    networks:
+      - prumo-net
+
+networks:
+  prumo-net:
+    external: true
