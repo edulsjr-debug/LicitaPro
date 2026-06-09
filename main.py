@@ -2372,7 +2372,7 @@ PROVEDORES_GRANDE = [
     (_groq,    "llama-3.3-70b-versatile",  32_000),
 ]
 
-_RESPONSE_SCHEMA_CAMPOS: dict = {
+_RESPONSE_SCHEMA_CAMPOS: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
         "numero_edital":        {"type": "STRING", "nullable": True},
@@ -2387,7 +2387,7 @@ _RESPONSE_SCHEMA_CAMPOS: dict = {
         "criterio_julgamento":  {"type": "STRING", "nullable": True},
         "documentos_habilitacao": {
             "type": "ARRAY",
-            "items": {"type": "STRING"},
+            "items": {"type": "STRING", "nullable": True},
         },
     },
     "required": [
@@ -2403,7 +2403,14 @@ def _executar_requisicao_gemini_sincrona(url: str, headers: dict, data_bytes: by
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=90) as resp:
         body = json.loads(resp.read().decode("utf-8"))
-        return body["candidates"][0]["content"]["parts"][0]["text"]
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise ValueError(f"Gemini retornou resposta sem candidatos: {body}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        raise ValueError("Gemini retornou texto vazio.")
+    return text
 
 
 async def _gemini_texto_livre(prompt: str, modelo: str = "gemini-2.5-flash-lite") -> str:
