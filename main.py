@@ -2372,6 +2372,39 @@ PROVEDORES_GRANDE = [
     (_groq,    "llama-3.3-70b-versatile",  32_000),
 ]
 
+_RESPONSE_SCHEMA_CAMPOS: dict = {
+    "type": "OBJECT",
+    "properties": {
+        "numero_edital":        {"type": "STRING", "nullable": True},
+        "orgao":                {"type": "STRING", "nullable": True},
+        "cnpj":                 {"type": "STRING", "nullable": True},
+        "modalidade":           {"type": "STRING", "nullable": True},
+        "objeto":               {"type": "STRING", "nullable": True},
+        "valor":                {"type": "STRING", "nullable": True},
+        "data_abertura":        {"type": "STRING", "nullable": True},
+        "prazo_envio_proposta": {"type": "STRING", "nullable": True},
+        "prazo_vigencia":       {"type": "STRING", "nullable": True},
+        "criterio_julgamento":  {"type": "STRING", "nullable": True},
+        "documentos_habilitacao": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+    },
+    "required": [
+        "numero_edital", "orgao", "cnpj", "modalidade", "objeto", "valor",
+        "data_abertura", "prazo_envio_proposta", "prazo_vigencia",
+        "criterio_julgamento", "documentos_habilitacao",
+    ],
+}
+
+
+def _executar_requisicao_gemini_sincrona(url: str, headers: dict, data_bytes: bytes) -> str:
+    """Executa chamada HTTP ao Gemini de forma síncrona para uso em asyncio.to_thread."""
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+        return body["candidates"][0]["content"]["parts"][0]["text"]
+
 
 async def _gemini_texto_livre(prompt: str, modelo: str = "gemini-2.5-flash-lite") -> str:
     """Chama Gemini com prompt livre e retorna texto bruto."""
