@@ -367,5 +367,58 @@ class ExtrairCamposFaltantesGeminiTest(unittest.TestCase):
         self.assertEqual(chamadas["n"], 1)
 
 
+from main import analisar_com_fallback
+
+
+class AnalisarComFallbackMergeTest(unittest.TestCase):
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_fallback_gemini_e_usado_quando_confianca_baixa(self):
+        """Verifica que quando o parser retorna confiança baixa, o fluxo Gemini é acionado
+        e a ficha final contém os dados vindos da IA (mergeados)."""
+        import json
+        texto_pobre = "PROCESSO LICITATÓRIO. Contratação de serviços."
+
+        resposta_ia = {
+            "numero_edital": "PP 099/2026",
+            "orgao": "Câmara Municipal de Curitiba",
+            "cnpj": "76.530.547/0001-00",
+            "modalidade": "Pregão Presencial",
+            "objeto": "Contratação de serviços de limpeza",
+            "valor": "R$ 80.000,00",
+            "data_abertura": "20/08/2026 10:00",
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": "12 meses",
+            "criterio_julgamento": "Menor Preço",
+            "documentos_habilitacao": ["Certidão negativa INSS"],
+        }
+
+        with patch("main._extrair_campos_faltantes_gemini", new_callable=AsyncMock, return_value=resposta_ia):
+            ficha = self._run(analisar_com_fallback(texto_pobre, num_docs=1, modo="auto"))
+
+        self.assertIn("## FICHA DE LICITAÇÃO", ficha)
+        self.assertIn("PP 099/2026", ficha)
+        self.assertIn("R$ 80.000,00", ficha)
+
+    def test_fallback_cai_no_groq_quando_gemini_falha(self):
+        """Quando _extrair_campos_faltantes_gemini lança HTTPException, deve chamar chamar_groq."""
+        from fastapi import HTTPException as FastAPIHTTPException
+
+        texto_pobre = "PROCESSO LICITATÓRIO. Contratação de serviços."
+
+        ficha_groq_mock = "## FICHA DE LICITAÇÃO\n| Campo | Valor |\n|---|---|\n| **Nº / Processo** | 001 |"
+
+        with patch("main._extrair_campos_faltantes_gemini",
+                   new_callable=AsyncMock,
+                   side_effect=FastAPIHTTPException(503, "Gemini falhou")), \
+             patch("main.chamar_groq", new_callable=AsyncMock, return_value=ficha_groq_mock) as mock_groq:
+            ficha = self._run(analisar_com_fallback(texto_pobre, num_docs=1, modo="auto"))
+
+        mock_groq.assert_called_once()
+        self.assertIn("## FICHA DE LICITAÇÃO", ficha)
+
+
 if __name__ == "__main__":
     unittest.main()

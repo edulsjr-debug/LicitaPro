@@ -3002,6 +3002,36 @@ async def analisar_com_fallback(texto: str, num_docs: int, modo: str = "auto") -
                     resultado.get("confianca", 0),
                     extra={"request_id": "-"},
                 )
+            # 2a) fallback estruturado: Gemini JSON + merge no dict do parser
+            try:
+                campos_contexto = {
+                    k: v for k, v in resultado.items()
+                    if k in _RESPONSE_SCHEMA_CAMPOS["properties"] and _is_identificado(v)
+                }
+                dados_ia = await _extrair_campos_faltantes_gemini(
+                    texto=texto_api,
+                    campos_extraidos=campos_contexto,
+                    faltantes=resultado.get("faltantes", []),
+                )
+                resultado_enriquecido = _mesclar_resultado_ia(resultado, dados_ia)
+                logger.info(
+                    "Fallback Gemini JSON: confiança %s%% → %s%%",
+                    resultado.get("confianca", 0),
+                    resultado_enriquecido.get("confianca", 0),
+                    extra={"request_id": "-"},
+                )
+                _stats["total_analises"] += 1
+                _stats["por_provedor"].setdefault(
+                    "gemini-fallback-json", {"analises": 0, "tokens": 0, "custo_usd": 0.0}
+                )["analises"] += 1
+                return resultado_enriquecido["ficha"]
+            except HTTPException as e:
+                logger.warning(
+                    "Fallback Gemini JSON falhou (%s). Usando chamar_groq como última instância.",
+                    e.detail,
+                    extra={"request_id": "-"},
+                )
+            # 2b) fallback Markdown (última instância)
             return await chamar_groq(texto_api, num_docs)
 
     if resultado.get("usar_fallback_api") and texto_longo and (modo == "parser" or not PARSER_FALLBACK_API):
