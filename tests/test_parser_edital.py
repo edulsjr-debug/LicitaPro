@@ -395,7 +395,8 @@ class AnalisarComFallbackMergeTest(unittest.TestCase):
             "documentos_habilitacao": ["Certidão negativa INSS"],
         }
 
-        with patch("main._extrair_campos_faltantes_gemini", new_callable=AsyncMock, return_value=resposta_ia):
+        with patch("main.PARSER_FALLBACK_API", True), \
+             patch("main._extrair_campos_faltantes_gemini", new_callable=AsyncMock, return_value=resposta_ia):
             ficha = self._run(analisar_com_fallback(texto_pobre, num_docs=1, modo="auto"))
 
         self.assertIn("## FICHA DE LICITAÇÃO", ficha)
@@ -410,7 +411,8 @@ class AnalisarComFallbackMergeTest(unittest.TestCase):
 
         ficha_groq_mock = "## FICHA DE LICITAÇÃO\n| Campo | Valor |\n|---|---|\n| **Nº / Processo** | 001 |"
 
-        with patch("main._extrair_campos_faltantes_gemini",
+        with patch("main.PARSER_FALLBACK_API", True), \
+             patch("main._extrair_campos_faltantes_gemini",
                    new_callable=AsyncMock,
                    side_effect=FastAPIHTTPException(503, "Gemini falhou")), \
              patch("main.chamar_groq", new_callable=AsyncMock, return_value=ficha_groq_mock) as mock_groq:
