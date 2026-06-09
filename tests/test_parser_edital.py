@@ -266,5 +266,106 @@ class MesclarResultadoIATest(unittest.TestCase):
         self.assertIn("R$ 120.000,00", resultado_final["ficha"])
 
 
+import json
+import asyncio
+from unittest.mock import patch, AsyncMock
+
+
+class ExtrairCamposFaltantesGeminiTest(unittest.TestCase):
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_retorna_dict_com_campos_extraidos(self):
+        from main import _extrair_campos_faltantes_gemini
+        dados_esperados = {
+            "numero_edital": "PE 042/2026",
+            "orgao": None,
+            "cnpj": "12.345.678/0001-99",
+            "modalidade": None,
+            "objeto": None,
+            "valor": "R$ 50.000,00",
+            "data_abertura": None,
+            "prazo_envio_proposta": None,
+            "prazo_vigencia": None,
+            "criterio_julgamento": None,
+            "documentos_habilitacao": [],
+        }
+        resposta_gemini = json.dumps(dados_esperados)
+
+        with patch("main._executar_requisicao_gemini_sincrona", return_value=resposta_gemini), \
+             patch("main._gemini_api_key", "fake-key"):
+            resultado = self._run(
+                _extrair_campos_faltantes_gemini(
+                    texto="texto de teste",
+                    campos_extraidos={"orgao": "Prefeitura"},
+                    faltantes=["numero_edital", "cnpj", "valor"],
+                )
+            )
+
+        self.assertEqual(resultado["numero_edital"], "PE 042/2026")
+        self.assertEqual(resultado["valor"], "R$ 50.000,00")
+        self.assertIsNone(resultado["orgao"])
+
+    def test_lanca_http_exception_sem_api_key(self):
+        from fastapi import HTTPException
+        from main import _extrair_campos_faltantes_gemini
+
+        with patch("main._gemini_api_key", None):
+            with self.assertRaises(HTTPException) as ctx:
+                self._run(
+                    _extrair_campos_faltantes_gemini(
+                        texto="x",
+                        campos_extraidos={},
+                        faltantes=["valor"],
+                    )
+                )
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_retry_em_429_e_cai_em_503_apos_esgotar(self):
+        import urllib.error
+        from fastapi import HTTPException
+        from main import _extrair_campos_faltantes_gemini
+
+        erro_429 = urllib.error.HTTPError(url="", code=429, msg="rate limit", hdrs=None, fp=None)  # type: ignore
+
+        with patch("main._executar_requisicao_gemini_sincrona", side_effect=erro_429), \
+             patch("main._gemini_api_key", "fake-key"), \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            with self.assertRaises(HTTPException) as ctx:
+                self._run(
+                    _extrair_campos_faltantes_gemini(
+                        texto="x",
+                        campos_extraidos={},
+                        faltantes=["valor"],
+                        max_tentativas=2,
+                    )
+                )
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_erro_400_nao_faz_retry(self):
+        import urllib.error
+        from fastapi import HTTPException
+        from main import _extrair_campos_faltantes_gemini
+
+        chamadas = {"n": 0}
+        def mock_req(*args, **kwargs):
+            chamadas["n"] += 1
+            raise urllib.error.HTTPError(url="", code=400, msg="bad request", hdrs=None, fp=None)  # type: ignore
+
+        with patch("main._executar_requisicao_gemini_sincrona", side_effect=mock_req), \
+             patch("main._gemini_api_key", "fake-key"):
+            with self.assertRaises(HTTPException):
+                self._run(
+                    _extrair_campos_faltantes_gemini(
+                        texto="x",
+                        campos_extraidos={},
+                        faltantes=["valor"],
+                        max_tentativas=3,
+                    )
+                )
+        self.assertEqual(chamadas["n"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

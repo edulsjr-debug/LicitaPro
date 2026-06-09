@@ -2413,6 +2413,72 @@ def _executar_requisicao_gemini_sincrona(url: str, headers: dict, data_bytes: by
     return text
 
 
+async def _extrair_campos_faltantes_gemini(
+    texto: str,
+    campos_extraidos: dict[str, Any],
+    faltantes: list[str],
+    max_tentativas: int = 3,
+) -> dict[str, Any]:
+    """Chama Gemini com responseSchema para extrair somente os campos faltantes."""
+    if not _gemini_api_key:
+        raise HTTPException(503, "GEMINI_API_KEY ausente — fallback Gemini indisponível.")
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-2.5-flash-lite:generateContent"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": _gemini_api_key,
+    }
+
+    prompt = (
+        "Você é um especialista em licitações públicas brasileiras.\n"
+        "O parser automático já extraiu os campos abaixo com sucesso — NÃO os altere:\n"
+        f"{json.dumps(campos_extraidos, ensure_ascii=False)}\n\n"
+        "Campos que falharam e precisam ser extraídos:\n"
+        f"{json.dumps(faltantes, ensure_ascii=False)}\n\n"
+        "Texto do edital:\n---\n"
+        f"{texto[:400_000]}\n---\n\n"
+        "Para cada campo listado: extraia o valor do texto. Se não encontrar, use null."
+    )
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _RESPONSE_SCHEMA_CAMPOS,
+            "temperature": 0.1,
+        },
+    }
+    data_bytes = json.dumps(payload).encode("utf-8")
+
+    tempo_espera = 2.0
+    for tentativa in range(max_tentativas):
+        try:
+            text_response = await asyncio.to_thread(
+                _executar_requisicao_gemini_sincrona, url, headers, data_bytes
+            )
+            return json.loads(text_response)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or 500 <= e.code < 600:
+                if tentativa == max_tentativas - 1:
+                    raise HTTPException(503, f"Gemini esgotado após {max_tentativas} tentativas. HTTP {e.code}")
+                await asyncio.sleep(tempo_espera)
+                tempo_espera *= 2
+            else:
+                raise HTTPException(503, f"Erro fatal Gemini HTTP {e.code}")
+        except json.JSONDecodeError:
+            raise HTTPException(503, "Gemini retornou JSON inválido.")
+        except Exception as exc:
+            if tentativa == max_tentativas - 1:
+                raise HTTPException(503, f"Falha de rede Gemini: {exc}")
+            await asyncio.sleep(tempo_espera)
+            tempo_espera *= 2
+
+    raise HTTPException(503, "Falha inesperada no fallback Gemini.")
+
+
 async def _gemini_texto_livre(prompt: str, modelo: str = "gemini-2.5-flash-lite") -> str:
     """Chama Gemini com prompt livre e retorna texto bruto."""
     if not _gemini_api_key:
