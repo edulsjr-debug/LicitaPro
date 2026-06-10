@@ -16,6 +16,7 @@ export default function NovoPage() {
   const [loading, setLoading] = useState(false)
   const [progresso, setProgresso] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
+  const [eta, setEta] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ficha, setFicha] = useState<string | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
@@ -61,7 +62,7 @@ export default function NovoPage() {
   }
 
   useEffect(() => {
-    if (!loading) { setElapsed(0); return }
+    if (!loading) { setElapsed(0); setEta(null); return }
     const t = window.setInterval(() => setElapsed((s) => s + 1), 1000)
     return () => window.clearInterval(t)
   }, [loading])
@@ -77,7 +78,7 @@ export default function NovoPage() {
     }
 
     try {
-      const response = await analisarArquivos(files, 'auto', setProgresso)
+      const response = await analisarArquivos(files, 'auto', setProgresso, setEta)
       setFicha(response.ficha)
       setAviso(response.aviso ?? null)
       setError(null)
@@ -246,11 +247,20 @@ export default function NovoPage() {
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
                   {progresso ?? 'Iniciando análise…'}
                 </span>
+                {eta ? (
+                  <span className="mt-2 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-white/20">
+                    <span
+                      className="block h-full rounded-full bg-white transition-all duration-1000 ease-linear"
+                      style={{ width: `${Math.min(95, (elapsed / eta) * 100)}%` }}
+                    />
+                  </span>
+                ) : null}
                 <span className="mt-1 text-xs font-normal text-white/70">
-                  {elapsed < 60
-                    ? `${elapsed}s`
-                    : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`}
-                  {elapsed > 30 ? ' — processando, aguarde…' : ''}
+                  {eta
+                    ? elapsed > eta
+                      ? 'Quase lá, finalizando…'
+                      : `Tempo estimado: ~${eta}s — estamos refinando os dados com IA para aumentar a confiabilidade da ficha.`
+                    : `${elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`}${elapsed > 30 ? ' — processando, aguarde…' : ''}`}
                 </span>
               </>
             ) : (

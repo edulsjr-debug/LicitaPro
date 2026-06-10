@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { atualizarSegmento, getFicha, getHistorico, getStats, urlArquivo } from '@/lib/api'
 import type { HistoricoDetalhe } from '@/lib/types'
-import { extrairJustificativas, formatarBytes, formatarData } from '@/lib/utils'
+import { extrairJustificativas, formatarBytes, formatarData, formatarDuracao } from '@/lib/utils'
 import { FichaMarkdown } from '@/components/FichaMarkdown'
 import { ScoreBadge } from '@/components/ScoreBadge'
 import { SegmentoBadge } from '@/components/SegmentoBadge'
@@ -240,6 +240,9 @@ export default function FichaPage() {
               />
               <ScoreBadge score={item.score || 0} breakdown={extrairJustificativas(item.ficha || '')} tooltipDirection="below" />
               {item.timestamp ? <span className="text-sm text-gray-500">{formatarData(item.timestamp)}</span> : null}
+              {item.tempo_decorrido_segundos ? (
+                <span className="text-sm text-gray-500" title="Tempo de análise">⏱ {formatarDuracao(item.tempo_decorrido_segundos)}</span>
+              ) : null}
             </div>
             <NomeEditavel id={params.id} nome={item.nome || item.orgao || ''} />
           </header>

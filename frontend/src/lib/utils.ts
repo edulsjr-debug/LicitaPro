@@ -48,6 +48,13 @@ export function dataRelativa(iso: string): string {
   return `ha ${days} dia${days === 1 ? '' : 's'}`
 }
 
+export function formatarDuracao(segundos: number): string {
+  if (segundos < 60) return `${Math.round(segundos)}s`
+  const minutos = Math.floor(segundos / 60)
+  const resto = Math.round(segundos % 60)
+  return `${minutos}m ${resto}s`
+}
+
 export function formatarBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1).replace('.', ',')} KB`

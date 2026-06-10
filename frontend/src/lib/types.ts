@@ -9,6 +9,7 @@ export interface HistoricoItem {
   score: number
   arquivos?: HistoricoArquivo[]
   tamanho_total_bytes?: number
+  tempo_decorrido_segundos?: number | null
 }
 
 export interface HistoricoDetalhe extends HistoricoItem {
@@ -30,6 +31,14 @@ export interface AnalisarResponse {
   id?: string
   persistido?: boolean
   aviso?: string
+  tempo_decorrido_segundos?: number | null
+}
+
+export interface JobStatus {
+  status: string
+  error?: string
+  progresso?: string
+  eta_segundos?: number
 }
 
 export interface HistoricoListResponse {

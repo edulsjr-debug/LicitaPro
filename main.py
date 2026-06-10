@@ -1166,6 +1166,7 @@ class AnalisarResponse(BaseModel):
     id: Optional[str] = None
     persistido: Optional[bool] = None
     aviso: Optional[str] = None
+    tempo_decorrido_segundos: Optional[float] = None
 
 
 def _obter_ocr_engine():
@@ -2329,7 +2330,23 @@ def _ler_ultimas_linhas(arquivo: Path, limite: int = 100) -> list[str]:
         return []
 
 
-def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto") -> dict:
+def _estimar_tempo_segundos(tamanho_bytes: int) -> int:
+    """Estima o tempo de análise (segundos) a partir do histórico recente de tamanho/duração."""
+    amostras = [
+        (h["tamanho_total_bytes"], h["tempo_decorrido_segundos"])
+        for h in _historico[:50]
+        if h.get("tamanho_total_bytes") and h.get("tempo_decorrido_segundos")
+    ]
+    if len(amostras) < 5:
+        return max(5, int(8 + (tamanho_bytes / 1_000_000) * 4))
+    taxa = sum(t / b for b, t in amostras) / len(amostras)
+    return max(5, int(tamanho_bytes * taxa))
+
+
+def registrar_analise(
+    ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]] = None, meta_arquivos: Optional[list[dict]] = None, fonte: str = "texto",
+    tempo_extracao_segundos: Optional[float] = None, tempo_analise_segundos: Optional[float] = None, tempo_decorrido_segundos: Optional[float] = None,
+) -> dict:
     analise_id = uuid.uuid4().hex[:10]
     anexos = _persistir_arquivos_analise(analise_id, arquivos_raw or [], meta_arquivos)
     registro = {
@@ -2345,13 +2362,19 @@ def registrar_analise(ficha: str, arquivos_raw: Optional[list[tuple[str, bytes]]
         "arquivos":           anexos,
         "fonte":              fonte,
         "tamanho_total_bytes": sum(len(c) for _, c in (arquivos_raw or [])),
+        "tempo_extracao_segundos": round(tempo_extracao_segundos, 1) if tempo_extracao_segundos is not None else None,
+        "tempo_analise_segundos": round(tempo_analise_segundos, 1) if tempo_analise_segundos is not None else None,
+        "tempo_decorrido_segundos": round(tempo_decorrido_segundos, 1) if tempo_decorrido_segundos is not None else None,
     }
     _historico.insert(0, registro)
     if len(_historico) > 500:
         _historico.pop()
     persistido = _salvar_historico()
     aviso = None if persistido else "Análise gerada mas não foi possível salvar no histórico. Verifique a conexão com o banco."
-    return {"id": analise_id, "score": registro["score"], "persistido": persistido, "aviso": aviso}
+    return {
+        "id": analise_id, "score": registro["score"], "persistido": persistido, "aviso": aviso,
+        "tempo_decorrido_segundos": registro["tempo_decorrido_segundos"],
+    }
 
 
 MAX_CHARS = 400_000
@@ -3552,7 +3575,9 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
     job_id = uuid.uuid4().hex[:16]
     request_id = request.state.request_id
     num_arquivos = len(arquivos)
-    _jobs[job_id] = {"status": "pending", "_ts": time.monotonic()}
+    tamanho_total_bytes = sum(len(c) for _, c in arquivos_raw)
+    eta_segundos = _estimar_tempo_segundos(tamanho_total_bytes)
+    _jobs[job_id] = {"status": "pending", "_ts": time.monotonic(), "eta_segundos": eta_segundos}
     _limpar_jobs_expirados()
     _audit("analisar_arquivo_start", request_id, arquivos=num_arquivos, job_id=job_id)
 
@@ -3561,9 +3586,11 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
 
     async def _processar():
         loop = asyncio.get_event_loop()
+        t0 = time.monotonic()
         try:
             label = f"{num_arquivos} arquivo{'s' if num_arquivos > 1 else ''}"
-            _prog(f"Lendo e extraindo texto de {label}…")
+            tamanho_mb = tamanho_total_bytes / 1_000_000
+            _prog(f"Extraindo texto de {label} (~{tamanho_mb:.1f} MB)…")
             texto_completo, meta_arquivos = await loop.run_in_executor(
                 None, montar_texto_caso_classificado_raw, arquivos_raw
             )
@@ -3582,12 +3609,16 @@ async def analisar_arquivo(request: Request, arquivos: list[UploadFile] = File(.
                     return "\n\n".join(partes), meta_arquivos
                 texto_completo, meta_arquivos = await loop.run_in_executor(None, _truncar)
 
-            chars_k = len(texto_completo) // 1000
-            _prog(f"Analisando {chars_k} mil caracteres com IA… (pode levar alguns minutos)")
+            t1 = time.monotonic()
+            _prog(f"Aplicando parser local e refinando com IA para aumentar a precisão da ficha — pode levar até ~{eta_segundos}s…")
             ficha = await analisar_com_fallback(texto_completo, num_arquivos, modo=modo)
-            _prog("Salvando resultado…")
+            t2 = time.monotonic()
+            _prog("Quase lá — organizando e salvando o resultado…")
             _stats["analises_hoje"] += 1
-            meta = registrar_analise(ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload")
+            meta = registrar_analise(
+                ficha, arquivos_raw=arquivos_raw, meta_arquivos=meta_arquivos, fonte="upload",
+                tempo_extracao_segundos=t1 - t0, tempo_analise_segundos=t2 - t1, tempo_decorrido_segundos=t2 - t0,
+            )
             _audit("analisar_arquivo_done", request_id, arquivos=num_arquivos, chars=len(texto_completo))
             _jobs[job_id] = {"status": "done", "ficha": ficha, **meta, "_ts": time.monotonic()}
             # notificação fire-and-forget
@@ -3627,8 +3658,10 @@ async def get_job(job_id: str):
 @app.post("/analisar", response_model=AnalisarResponse)
 async def analisar(http_request: Request, request: AnalisarRequest):
     _audit("analisar_texto_start", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
+    t0 = time.monotonic()
     ficha = await analisar_com_fallback(request.texto, request.num_docs, modo=request.modo)
-    meta = registrar_analise(ficha)
+    tempo_decorrido = time.monotonic() - t0
+    meta = registrar_analise(ficha, tempo_extracao_segundos=0, tempo_analise_segundos=tempo_decorrido, tempo_decorrido_segundos=tempo_decorrido)
     send_analysis_complete("texto", int(meta.get("score", 0)), meta["id"])
     _audit("analisar_texto_done", http_request.state.request_id, chars=len(request.texto or ""), num_docs=request.num_docs)
     return AnalisarResponse(ficha=ficha, **meta)

@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { getHistorico } from '@/lib/api'
 import type { HistoricoItem } from '@/lib/types'
-import { diaGrupo, horaCurta } from '@/lib/utils'
+import { diaGrupo, formatarDuracao, horaCurta } from '@/lib/utils'
 import { ScoreBadge } from '@/components/ScoreBadge'
 import { SegmentoBadge } from '@/components/SegmentoBadge'
 import { Skeleton } from '@/components/Skeleton'
@@ -160,6 +160,9 @@ export default function HistoricoPage() {
                     <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-gray-500">
                       <SegmentoBadge segmento={item.segmento} />
                       <span>{horaCurta(item.timestamp)}</span>
+                      {item.tempo_decorrido_segundos ? (
+                        <span title="Tempo de análise">⏱ {formatarDuracao(item.tempo_decorrido_segundos)}</span>
+                      ) : null}
                     </div>
                   </Link>
                 ))}
